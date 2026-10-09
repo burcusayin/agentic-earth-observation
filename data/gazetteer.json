@@ -1,0 +1,7 @@
+{
+  "_note": "Approximate boxes [west, south, east, north] typed by hand as placeholders. Check each one against a map before using it as ground truth.",
+  "rome": [12.35, 41.78, 12.65, 42.00],
+  "trento": [11.02, 46.00, 11.20, 46.13],
+  "mount etna": [14.85, 37.65, 15.15, 37.85],
+  "venice lagoon": [12.15, 45.25, 12.60, 45.60]
+}

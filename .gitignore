@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+results/raw/
+.DS_Store
+
+# Private, never committed: local memory, keys, personal notes
+.local/
+CLAUDE.local.md
+.env.*
+!.env.example
+.envrc
+.claude/settings.local.json
+*.key
+*.pem
+secrets/
