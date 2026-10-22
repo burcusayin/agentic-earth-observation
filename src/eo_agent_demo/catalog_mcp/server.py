@@ -17,6 +17,7 @@ Validation at the boundary (reject, do not guess):
     limit: 1-50
     collection: must be one returned by list_collections()
 """
+
 from __future__ import annotations
 
 # TODO(M1): create the server with the MCP Python SDK, register the four tools,

@@ -6,6 +6,7 @@ For each task in data/golden.jsonl and each model under test:
 Write one JSON line per (task, model, run) to results/raw/, then a summary table with
 bootstrap confidence intervals to results/summary.md.
 """
+
 from __future__ import annotations
 
 # TODO(M4)

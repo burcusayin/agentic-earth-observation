@@ -5,6 +5,9 @@ A small agentic Earth Observation assistant. You ask for satellite scenes in pla
 to a retrieval sub-agent, and answers with the scene ids it found. The point of the project is the
 evaluation: how often the agents call the right tool with the right arguments, and how fast.
 
+This is a personal project, built to gain hands-on experience with multi-agent orchestration in LangGraph,
+the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evaluation of LLM tool use.
+
 Status: skeleton. Only `evals/scoring.py` and its tests are implemented.
 
 ## What it demonstrates
@@ -16,7 +19,6 @@ Status: skeleton. Only `evals/scoring.py` and its tests are implemented.
 | A2A: agent cards and task delegation between independent agents | `retrieval_agent/a2a_server.py`: the sub-agent published over A2A; the orchestrator is its client |
 | A specialised data-retrieval sub-agent | `retrieval_agent/agent.py` |
 | Evaluation of tool-use accuracy, task success, robustness and latency | `evals/`: golden tasks, per-argument scoring, bootstrap confidence intervals, model comparison |
-| Documentation for extending the system | `docs/add_a_tool.md`: add a new MCP tool in ten minutes |
 
 ## Architecture
 
@@ -45,50 +47,46 @@ Three processes, so each boundary is a real protocol boundary and not a function
 - **Scope:** no web UI, no vector database, no imagery understanding. Each would add a lot of work without
   strengthening what the project sets out to show: orchestration, MCP, A2A and their evaluation.
 
-## Milestones
+## Roadmap
 
-About six working days. Each milestone ends with something that runs.
+### Milestone 1: working system and first evaluation (in progress)
 
-**M1. Catalogue MCP server (day 1).** Implement the four tools in `catalog_mcp/server.py` with validation at
-the boundary, plus unit tests against recorded STAC responses. Done when an MCP inspector can list and call
-the tools.
+- **Catalogue MCP server:** validated tools to list products, resolve place names, search scenes and read
+  one scene, over a public STAC API.
+- **Retrieval agent:** a LangGraph agent that uses the MCP tools, with a step limit, published over A2A with an
+  agent card.
+- **Orchestrator:** a LangGraph graph that plans, delegates to the retrieval agent over A2A, declines
+  out-of-scope requests, asks for clarification when a place is unknown, and remembers the previous search.
+- **Golden set:** about 25 tasks across single searches, follow-up questions, robustness, out-of-scope requests
+  and failure cases. It is split into a dev set and a test set, and the test set is frozen before any prompt
+  is written.
+- **Evaluation:** two local models (Ollama) and two Mistral API models, three runs each.
+  - Scoring: tool choice and per-argument accuracy, task success against a direct STAC query, fabricated scene
+    ids (must be zero), latency and cost per task.
+  - Bootstrap confidence intervals.
 
-**M2. Retrieval agent (day 2).** LangGraph agent with a model node, a tool node and a step limit; tools loaded
-from the MCP server. Done when "Sentinel-2 over Rome, July 2025" returns scene ids from a script.
+### Follow-up milestones (planned)
 
-**M3. A2A and the orchestrator (day 3).** Publish the retrieval agent over A2A with an agent card; build the
-orchestrator graph with plan, delegate and synthesise nodes and a checkpointer. Done when a two-turn
-conversation ("same area, but November 2024") reuses the earlier place.
-
-**M4. Evaluation harness (day 4).** Grow `data/golden.jsonl` from 5 to about 40 tasks across the categories
-below; implement `evals/run_eval.py`. Record every tool call, latency and token usage per run.
-
-| Category | What it tests | Target count |
-|---|---|---|
-| single_search | right collection, box, dates, cloud filter | 15 |
-| memory | follow-up questions that depend on earlier turns | 6 |
-| robustness | typos, other languages, vague dates, paraphrases of the same task | 10 |
-| out_of_scope | should decline without calling a tool | 5 |
-| tool_failure | the catalogue returns an error or nothing; the agent must say so | 4 |
-
-Metrics: tool-selection accuracy, per-argument accuracy, task success (scene ids match a direct STAC query),
-fabricated scene ids (must be zero), latency p50 and p95, cost per task.
-
-**M5. Results (day 5).** Run two or three models, three runs each. Write `results/summary.md` with bootstrap
-confidence intervals and an honest error analysis: which category fails, and why. Then make one targeted
-improvement and re-measure, so the README can show a before and after.
-
-**M6. Release (day 6).** `docs/add_a_tool.md`, a CI workflow (ruff, mypy, pytest), a licence and pinned
-dependencies.
+- **Evaluation rigour:**
+  - A recorded local catalogue, so evaluation runs are offline and fully reproducible.
+  - Fault injection (timeouts, server errors, rate limits).
+  - A golden set of about 50 tasks.
+  - Determinism statistics and an accuracy-versus-cost chart.
+  - One targeted improvement, measured before and after.
+- **Breadth and polish:**
+  - The Copernicus Data Space catalogue as a second backend.
+  - Local tracing with Arize Phoenix.
+  - Property-based tests.
+  - Claude Code skills for common workflows.
+  - A demo mode that needs no model and no API key.
+  - A short guide to adding a new MCP tool.
 
 ## Getting started
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env                  # then fill in the model provider and key
-pytest
-```
+Requires [uv](https://docs.astral.sh/uv/) and make.
 
-The agent, MCP and A2A libraries change quickly. Read the current documentation of each before writing M1 to
-M3, and pin the versions once the first end-to-end run works.
+```bash
+make setup     # creates .venv from uv.lock and installs the git hooks
+make check     # lint, format check, mypy --strict, tests with coverage
+cp .env.example .env   # then set the model provider (and a key for paid models)
+```
