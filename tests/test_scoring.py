@@ -13,7 +13,7 @@ def test_iou_identical_and_disjoint() -> None:
 
 
 def test_iou_rejects_inverted_box() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid bbox"):
         bbox_iou((2.0, 0.0, 1.0, 1.0), ROME)
 
 
@@ -24,10 +24,17 @@ def test_date_range_tolerance() -> None:
 
 
 def test_score_search_call() -> None:
-    expected = {"collection": "sentinel-2-l2a", "bbox": list(ROME),
-                "start_date": "2025-07-01", "end_date": "2025-07-31", "max_cloud_cover": 20}
+    expected = {
+        "collection": "sentinel-2-l2a",
+        "bbox": list(ROME),
+        "start_date": "2025-07-01",
+        "end_date": "2025-07-31",
+        "max_cloud_cover": 20,
+    }
     assert score_search_call(dict(expected), expected)["all"]
     wrong = dict(expected, collection="sentinel-1-grd")
     scored = score_search_call(wrong, expected)
-    assert not scored["collection"] and scored["bbox"] and not scored["all"]
+    assert not scored["collection"]
+    assert scored["bbox"]
+    assert not scored["all"]
     assert not score_search_call({"collection": "sentinel-2-l2a"}, expected)["bbox"]

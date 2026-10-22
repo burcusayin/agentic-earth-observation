@@ -1,7 +1,9 @@
 """Pure scoring functions for tool-use accuracy. No network, no LLM."""
+
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 BBox = tuple[float, float, float, float]  # west, south, east, north
 
@@ -26,7 +28,9 @@ def date_range_matches(got: tuple[str, str], expected: tuple[str, str], toleranc
     return abs((g0 - e0).days) <= tolerance_days and abs((g1 - e1).days) <= tolerance_days
 
 
-def score_search_call(call: dict, expected: dict, min_iou: float = 0.5) -> dict[str, bool]:
+def score_search_call(
+    call: dict[str, Any], expected: dict[str, Any], min_iou: float = 0.5
+) -> dict[str, bool]:
     """Compare one search_scenes call with the golden expectation, argument by argument."""
     try:
         bbox_ok = bbox_iou(tuple(call["bbox"]), tuple(expected["bbox"])) >= min_iou

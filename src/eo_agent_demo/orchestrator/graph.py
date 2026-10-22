@@ -7,6 +7,7 @@ Nodes:
     synthesise  write the answer, citing scene ids returned by the sub-agent only
 Memory: a checkpointer so a follow-up ("same area, but last winter") reuses the earlier bbox.
 """
+
 from __future__ import annotations
 
 # TODO(M3): build_orchestrator(model: str) -> compiled graph

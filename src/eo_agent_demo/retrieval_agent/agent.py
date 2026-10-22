@@ -6,6 +6,7 @@ the tools from the MCP server.
 Milestone 3: expose it as an A2A server (agent card, one skill: "find satellite
 scenes for a place and period") in a2a_server.py.
 """
+
 from __future__ import annotations
 
 # TODO(M2): build_retrieval_agent(model: str) -> compiled graph
