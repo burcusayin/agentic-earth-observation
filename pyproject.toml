@@ -60,9 +60,9 @@ warn_unreachable = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not integration and not live"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--block-network", "-m", "not integration and not live"]
 markers = [
-    "integration: needs local servers and Ollama; run with `uv run pytest -m integration`",
+    "integration: needs local servers and Ollama; run with `uv run pytest -m integration --allowed-hosts=127.0.0.1,localhost`",
     "live: calls a public API or a paid model; never runs in CI",
 ]
 

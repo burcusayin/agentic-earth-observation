@@ -40,7 +40,9 @@ make hooks     # every pre-commit hook on every file, including gitleaks and the
 - **Tests that need more than the default run:**
   - Default: tests marked `integration` (local servers and Ollama) or `live` (a public API or a paid model) are
     skipped.
-  - Run integration tests with `uv run pytest -m integration`.
+  - Every test run blocks network access (`--block-network`); contract tests replay recorded responses
+    from `tests/cassettes/`.
+  - Run integration tests with `uv run pytest -m integration --allowed-hosts=127.0.0.1,localhost`.
   - Run `live` tests only when asked; they never run in CI.
 
 ## How to work here
