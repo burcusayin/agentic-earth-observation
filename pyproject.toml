@@ -55,7 +55,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "S", "PT", "ANN"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 warn_unreachable = true
 
 [tool.pytest.ini_options]

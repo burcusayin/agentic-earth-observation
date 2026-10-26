@@ -1,7 +1,158 @@
 {
-  "_note": "Approximate boxes [west, south, east, north] typed by hand as placeholders. Check each one against a map before using it as ground truth.",
-  "rome": [12.35, 41.78, 12.65, 42.00],
-  "trento": [11.02, 46.00, 11.20, 46.13],
-  "mount etna": [14.85, 37.65, 15.15, 37.85],
-  "venice lagoon": [12.15, 45.25, 12.60, 45.60]
+  "source": "OpenStreetMap via Nominatim (https://nominatim.openstreetmap.org)",
+  "licence": "(c) OpenStreetMap contributors, Open Database License (ODbL) 1.0",
+  "retrieved": "2026-10-26",
+  "bbox_order": "west, south, east, north (degrees)",
+  "places": {
+    "rome": {
+      "name": "Rome",
+      "aliases": [
+        "Roma",
+        "Rom"
+      ],
+      "bbox": [
+        12.2344,
+        41.6556,
+        12.8558,
+        42.141
+      ],
+      "osm": "relation/41485",
+      "kind": "city"
+    },
+    "milan": {
+      "name": "Milan",
+      "aliases": [
+        "Milano",
+        "Mailand"
+      ],
+      "bbox": [
+        9.0409,
+        45.3867,
+        9.2781,
+        45.5358
+      ],
+      "osm": "relation/44915",
+      "kind": "city"
+    },
+    "florence": {
+      "name": "Florence",
+      "aliases": [
+        "Firenze",
+        "Florenz"
+      ],
+      "bbox": [
+        11.1498,
+        43.7259,
+        11.3389,
+        43.8355
+      ],
+      "osm": "relation/42602",
+      "kind": "city"
+    },
+    "naples": {
+      "name": "Naples",
+      "aliases": [
+        "Napoli",
+        "Neapel"
+      ],
+      "bbox": [
+        14.1321,
+        40.7912,
+        14.3538,
+        40.9161
+      ],
+      "osm": "relation/40767",
+      "kind": "city"
+    },
+    "trento": {
+      "name": "Trento",
+      "aliases": [
+        "Trient",
+        "Trente"
+      ],
+      "bbox": [
+        11.0215,
+        45.9757,
+        11.1939,
+        46.1522
+      ],
+      "osm": "relation/46663",
+      "kind": "city"
+    },
+    "paris": {
+      "name": "Paris",
+      "aliases": [
+        "Parigi"
+      ],
+      "bbox": [
+        2.2241,
+        48.8156,
+        2.4698,
+        48.9022
+      ],
+      "osm": "relation/71525",
+      "kind": "city"
+    },
+    "munich": {
+      "name": "Munich",
+      "aliases": [
+        "München",
+        "Monaco di Baviera"
+      ],
+      "bbox": [
+        11.3608,
+        48.0616,
+        11.7229,
+        48.2481
+      ],
+      "osm": "relation/62428",
+      "kind": "city"
+    },
+    "venice lagoon": {
+      "name": "Venetian Lagoon",
+      "aliases": [
+        "Laguna di Venezia",
+        "Lagune von Venedig",
+        "Lagune de Venise"
+      ],
+      "bbox": [
+        12.1289,
+        45.1835,
+        12.5405,
+        45.5449
+      ],
+      "osm": "relation/3049430",
+      "kind": "lagoon"
+    },
+    "lake garda": {
+      "name": "Lake Garda",
+      "aliases": [
+        "Lago di Garda",
+        "Gardasee",
+        "Lac de Garde"
+      ],
+      "bbox": [
+        10.5109,
+        45.4403,
+        10.8769,
+        45.8848
+      ],
+      "osm": "relation/8569",
+      "kind": "lake"
+    },
+    "mount etna": {
+      "name": "Etna",
+      "aliases": [
+        "Ätna"
+      ],
+      "bbox": [
+        14.8224,
+        37.6186,
+        15.1328,
+        37.8768
+      ],
+      "osm": "relation/14398078",
+      "kind": "nature_reserve"
+    }
+  }
 }
