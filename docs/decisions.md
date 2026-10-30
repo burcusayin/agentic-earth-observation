@@ -65,3 +65,9 @@ decision is made or reversed; do not rewrite old entries.
     claimed.
 - **What is frozen** at tag `golden-test-v1`: the test split, the gazetteer, the rules and scoring in
   `docs/evaluation.md`, and the evaluation code (hashed into every run record).
+
+## 2026-10-31
+- **Ollama seed is 42** for every evaluation request (with `num_ctx=16384` and `temperature=0`, as decided on
+  2026-10-09).
+- **CI also runs the commit checks** (including the gitleaks secret scan), and the uv version is pinned in CI.
+- **Commit messages are checked** for co-author lines and private strings by a commit-msg hook.

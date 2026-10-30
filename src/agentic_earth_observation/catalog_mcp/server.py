@@ -123,8 +123,6 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
         "eo-catalog", instructions=INSTRUCTIONS, host=HOST, port=PORT, stateless_http=True, json_response=True
     )
 
-    # Worked example: a tool is a typed function. FastMCP turns the type hints into the input schema, the
-    # docstring into the description, and the returned pydantic model into structured output.
     @mcp.tool(annotations=LOCAL)
     def list_products() -> ProductList:
         """List the satellite products you can search, with what each is for and its first available date."""

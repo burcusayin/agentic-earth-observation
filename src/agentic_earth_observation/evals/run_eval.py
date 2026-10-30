@@ -1,12 +1,8 @@
-"""Evaluation runner (milestone 4).
+"""Evaluation runner (planned, Milestone 1). Not implemented yet.
 
-For each task in data/golden.jsonl and each model under test:
-    run the orchestrator, record every tool call, the final answer, latency and token usage
-    score with evals/scoring.py
-Write one JSON line per (task, model, run) to results/raw/, then a summary table with
-bootstrap confidence intervals to results/summary.md.
+For each task in data/golden/{dev,test}.jsonl and each model under test, run the system, record every tool
+call at the MCP server, the final status, the cited scene ids, latency and token usage, and score each turn
+with evals/scoring.py as described in docs/evaluation.md. One JSON record per (task, model, run).
 """
 
 from __future__ import annotations
-
-# TODO(M4)

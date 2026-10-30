@@ -1,12 +1,8 @@
-"""Data-retrieval sub-agent: a LangGraph agent that answers scene-search requests
-using only the catalogue MCP tools.
+"""Retrieval agent (planned, Milestone 1). Not implemented yet.
 
-Milestone 2: build the graph (model node + tool node, with a step limit) and load
-the tools from the MCP server.
-Milestone 3: expose it as an A2A server (agent card, one skill: "find satellite
-scenes for a place and period") in a2a_server.py.
+A LangGraph agent that answers scene-search requests using only the catalogue MCP tools: a model node and a
+tool node with an explicit step limit. Tool errors are passed back to the model; any other failure ends the
+run as an infrastructure error. a2a_server.py publishes it over A2A.
 """
 
 from __future__ import annotations
-
-# TODO(M2): build_retrieval_agent(model: str) -> compiled graph

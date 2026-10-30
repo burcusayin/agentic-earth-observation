@@ -23,9 +23,11 @@ dependencies = [
     "uvicorn>=0.54,<1",
 ]
 
+[project.urls]
+Repository = "https://github.com/burcusayin/agentic-earth-observation"
+
 [dependency-groups]
 dev = [
-    "hypothesis>=6.168",
     "mypy==2.4.0",
     "pre-commit>=4.6",
     "pytest>=9.1",
@@ -33,6 +35,9 @@ dev = [
     "pytest-recording>=0.14",
     "ruff==0.16.10",
 ]
+
+[tool.uv]
+required-version = ">=0.12.23"
 
 [build-system]
 requires = ["hatchling"]

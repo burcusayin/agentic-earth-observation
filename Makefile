@@ -21,7 +21,7 @@ format: ## Format with ruff
 format-check: ## Fail if any file needs formatting
 	$(UV) run ruff format --check .
 
-typecheck: ## Type-check src and tests with mypy --strict
+typecheck: ## Type-check src, tests and scripts with mypy --strict
 	$(UV) run mypy
 
 test: ## Run unit and contract tests with coverage (no network, no models)
@@ -40,3 +40,4 @@ inspector: ## Open the MCP Inspector on the running catalogue server (needs Node
 
 clean: ## Remove caches and coverage output
 	rm -rf .mypy_cache .ruff_cache .pytest_cache .coverage htmlcov
+	find src tests scripts -name __pycache__ -type d -prune -exec rm -rf {} +

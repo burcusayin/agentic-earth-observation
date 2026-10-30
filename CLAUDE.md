@@ -10,7 +10,7 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
 
 - Scope is **Milestone 1** in the README roadmap. Work on follow-up items (recorded catalogue, fault injection,
   CDSE, Phoenix, skills, demo mode) only when asked.
-- `docs/decisions.md`: dated technical decisions with their reasons. It holds no budgets or accounts.
+- `docs/decisions.md`: dated technical decisions with their reasons.
   - Read it before proposing a change of scope or design.
   - Add a dated entry when a decision is made or reversed.
 - `src/agentic_earth_observation/`:
