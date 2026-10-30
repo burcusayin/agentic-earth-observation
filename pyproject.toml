@@ -39,7 +39,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/eo_agent_demo"]
+packages = ["src/agentic_earth_observation"]
 
 [tool.ruff]
 line-length = 110
@@ -67,7 +67,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["eo_agent_demo"]
+source = ["agentic_earth_observation"]
 branch = true
 
 [tool.coverage.report]

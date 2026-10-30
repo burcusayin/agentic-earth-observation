@@ -19,9 +19,9 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, ValidationError
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer, Place
-from eo_agent_demo.catalog.stac import CatalogError, SceneSummary, StacCatalog
-from eo_agent_demo.domain import MISSION_START, Product, SearchRequest
+from agentic_earth_observation.catalog.gazetteer import Gazetteer, Place
+from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary, StacCatalog
+from agentic_earth_observation.domain import MISSION_START, Product, SearchRequest
 
 HOST = "127.0.0.1"
 PORT = 8001

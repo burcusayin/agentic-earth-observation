@@ -13,10 +13,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import CallToolResult, TextContent
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer
-from eo_agent_demo.catalog.stac import CatalogError, SceneSummary
-from eo_agent_demo.catalog_mcp.server import build_server
-from eo_agent_demo.domain import Product, SearchRequest
+from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary
+from agentic_earth_observation.catalog_mcp.server import build_server
+from agentic_earth_observation.domain import Product, SearchRequest
 
 pytestmark = pytest.mark.anyio
 

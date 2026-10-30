@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer, GazetteerError, normalise
+from agentic_earth_observation.catalog.gazetteer import Gazetteer, GazetteerError, normalise
 
 
 @pytest.fixture(scope="module")

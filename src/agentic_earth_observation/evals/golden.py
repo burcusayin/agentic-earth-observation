@@ -1,7 +1,8 @@
 """The golden set: task format, loading, and validation against the gazetteer and the domain rules.
 
-See docs/evaluation.md for the labelling rules. `uv run python -m eo_agent_demo.evals.golden` validates the
-committed golden set and prints a summary.
+See docs/evaluation.md for the labelling rules. To validate the committed golden set and print a summary:
+
+    uv run python -m agentic_earth_observation.evals.golden
 """
 
 from __future__ import annotations
@@ -15,8 +16,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer
-from eo_agent_demo.domain import Product, SearchRequest
+from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.domain import Product, SearchRequest
 
 GOLDEN_DIR = Path(__file__).resolve().parents[3] / "data" / "golden"
 SPLITS = ("dev", "test")

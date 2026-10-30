@@ -13,7 +13,7 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
 - `docs/decisions.md`: dated technical decisions with their reasons. It holds no budgets or accounts.
   - Read it before proposing a change of scope or design.
   - Add a dated entry when a decision is made or reversed.
-- `src/eo_agent_demo/`:
+- `src/agentic_earth_observation/`:
   - `domain.py`: validated types for every search (product, bbox, dates, cloud cover, limit).
   - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
   - `catalog_mcp/`: the MCP server with four tools; no LLM.

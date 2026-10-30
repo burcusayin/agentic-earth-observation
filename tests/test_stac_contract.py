@@ -11,8 +11,8 @@ from datetime import date
 
 import pytest
 
-from eo_agent_demo.catalog.stac import StacCatalog
-from eo_agent_demo.domain import Product, SearchRequest
+from agentic_earth_observation.catalog.stac import StacCatalog
+from agentic_earth_observation.domain import Product, SearchRequest
 
 pytestmark = pytest.mark.vcr
 

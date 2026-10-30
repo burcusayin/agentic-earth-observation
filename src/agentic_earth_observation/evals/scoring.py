@@ -12,8 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer
-from eo_agent_demo.evals.golden import Expectation, ExpectedSearch, Outcome, Route
+from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.evals.golden import Expectation, ExpectedSearch, Outcome, Route
 
 MIN_BBOX_IOU = 0.95
 SEARCH_ARGUMENTS = frozenset({"product", "bbox", "start_date", "end_date", "max_cloud_cover", "limit"})

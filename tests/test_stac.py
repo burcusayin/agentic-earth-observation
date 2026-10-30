@@ -8,7 +8,7 @@ import pytest
 from pystac_client import Client
 from pystac_client.exceptions import APIError
 
-from eo_agent_demo.catalog.stac import (
+from agentic_earth_observation.catalog.stac import (
     EARTH_SEARCH_COLLECTIONS,
     CatalogError,
     SceneSummary,
@@ -16,7 +16,7 @@ from eo_agent_demo.catalog.stac import (
     matches,
     summarise,
 )
-from eo_agent_demo.domain import Product, SearchRequest
+from agentic_earth_observation.domain import Product, SearchRequest
 
 S2 = "sentinel-2-c1-l2a"
 ROME_JULY_CLOUD_10 = SearchRequest.model_validate(

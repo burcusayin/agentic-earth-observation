@@ -77,7 +77,7 @@ These rules decide the expected answer for every task. The agents' prompts state
 - `search` is the expected `search_scenes` call. `place` is a gazetteer key. `cloud` is the accepted range, or `null` when the argument must be absent. `limit` is present only when the question states one.
 - `outcomes`, when present, lists the acceptable final statuses (`ok`, `empty`, `error`, `declined`, `clarified`), for tasks where the right behaviour is to report a problem.
 
-`eo_agent_demo.evals.golden` validates every task: known category and split, gazetteer keys that exist, and an expected search that passes the same validators as a real tool call.
+`agentic_earth_observation.evals.golden` validates every task: known category and split, gazetteer keys that exist, and an expected search that passes the same validators as a real tool call.
 
 ## Scoring
 

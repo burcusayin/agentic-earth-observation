@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer
-from eo_agent_demo.evals.golden import Expectation, ExpectedSearch, Route
-from eo_agent_demo.evals.scoring import (
+from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.evals.golden import Expectation, ExpectedSearch, Route
+from agentic_earth_observation.evals.scoring import (
     ToolCall,
     TurnTrace,
     bbox_iou,

@@ -33,7 +33,7 @@ hooks: ## Run every pre-commit hook on all files
 	$(UV) run pre-commit run --all-files
 
 serve-mcp: ## Run the catalogue MCP server on http://127.0.0.1:8001/mcp (Ctrl+C to stop)
-	$(UV) run python -m eo_agent_demo.catalog_mcp.server
+	$(UV) run python -m agentic_earth_observation.catalog_mcp.server
 
 inspector: ## Open the MCP Inspector on the running catalogue server (needs Node; start make serve-mcp first)
 	npx -y @modelcontextprotocol/inspector@$(INSPECTOR_VERSION) --server-url http://127.0.0.1:8001/mcp --transport http

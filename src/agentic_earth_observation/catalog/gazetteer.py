@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from eo_agent_demo.domain import BBox
+from agentic_earth_observation.domain import BBox
 
 DEFAULT_PATH = Path(__file__).resolve().parents[3] / "data" / "gazetteer.json"
 MAX_NAME_LENGTH = 200

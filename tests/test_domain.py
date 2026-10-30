@@ -1,4 +1,4 @@
-"""Specification for the validated types in eo_agent_demo.domain: what is accepted and what is rejected."""
+"""Specification for the validated domain types: what is accepted and what is rejected."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from eo_agent_demo.domain import BBox, DateRange, Product, SearchRequest
+from agentic_earth_observation.domain import BBox, DateRange, Product, SearchRequest
 
 ROME = {"west": 12.35, "south": 41.78, "east": 12.65, "north": 42.00}
 JULY_2025 = {"start": "2025-07-01", "end": "2025-07-31"}

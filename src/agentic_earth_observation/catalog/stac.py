@@ -16,7 +16,7 @@ from pystac_client import Client
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 
-from eo_agent_demo.domain import BBox, Product, SearchRequest
+from agentic_earth_observation.domain import BBox, Product, SearchRequest
 
 logger = logging.getLogger(__name__)
 

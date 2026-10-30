@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from eo_agent_demo.catalog.gazetteer import Gazetteer
-from eo_agent_demo.evals.golden import Task, check_tasks, load_golden
+from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.evals.golden import Task, check_tasks, load_golden
 
 
 def task(**overrides: object) -> dict[str, Any]:

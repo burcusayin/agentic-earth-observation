@@ -19,8 +19,8 @@ from typing import Any
 
 import httpx
 
-from eo_agent_demo.catalog.stac import USER_AGENT
-from eo_agent_demo.domain import BBox
+from agentic_earth_observation.catalog.stac import USER_AGENT
+from agentic_earth_observation.domain import BBox
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OUTPUT = Path(__file__).resolve().parent.parent / "data" / "gazetteer.json"
