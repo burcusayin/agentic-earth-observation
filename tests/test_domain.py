@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, tzinfo
 
 import pytest
 from pydantic import ValidationError
 
+from agentic_earth_observation import domain
 from agentic_earth_observation.domain import BBox, DateRange, Product, SearchRequest
 
 ROME = {"west": 12.35, "south": 41.78, "east": 12.65, "north": 42.00}
@@ -76,7 +77,7 @@ class TestBBox:
 class TestDateRange:
     def test_parses_iso_strings_and_builds_the_stac_interval(self) -> None:
         dates = DateRange.model_validate(JULY_2025)
-        assert dates.to_stac_interval() == "2025-07-01T00:00:00Z/2025-07-31T23:59:59Z"
+        assert dates.to_stac_interval() == "2025-07-01T00:00:00Z/2025-07-31T23:59:59.999999Z"
 
     def test_accepts_a_single_day_including_a_leap_day(self) -> None:
         assert DateRange(start=date(2024, 2, 29), end=date(2024, 2, 29)).start == date(2024, 2, 29)
@@ -145,3 +146,51 @@ class TestSearchRequest:
 
     def test_rejects_a_start_in_the_future(self) -> None:
         assert_rejected(lambda: make_request(dates={"start": "2999-01-01", "end": "2999-01-31"}), "future")
+
+
+class TestStrictness:
+    """Misspelt fields and booleans must be refused, never silently dropped or turned into numbers."""
+
+    def test_rejects_an_unknown_field_instead_of_dropping_it(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            make_request(maxCloudCover=5)
+
+    def test_rejects_an_unknown_bbox_field(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            BBox.model_validate({**ROME, "height": 1.0})
+
+    @pytest.mark.parametrize("field", ["max_cloud_cover", "limit"])
+    def test_rejects_a_boolean_where_a_number_is_expected(self, field: str) -> None:
+        with pytest.raises(ValidationError):
+            make_request(**{field: True})
+
+    def test_rejects_a_number_given_as_text(self) -> None:
+        with pytest.raises(ValidationError):
+            make_request(max_cloud_cover="10")
+
+    def test_accepts_integers_for_coordinates_and_cloud_cover(self) -> None:
+        assert BBox(west=12, south=41, east=13, north=42).west == 12
+        assert make_request(max_cloud_cover=10).max_cloud_cover == 10
+
+
+class TestBoundaries:
+    def test_accepts_a_box_at_the_area_limit_despite_float_rounding(self) -> None:
+        # 17.35 - 12.35 is 4.999999999999998 in floating point; the box is exactly 5 x 5 degrees.
+        assert BBox(west=12.35, south=12.35, east=17.35, north=17.35).east == 17.35
+
+    def test_the_last_moment_of_the_end_day_is_inside_the_interval(self) -> None:
+        dates = DateRange(start=date(2025, 7, 1), end=date(2025, 7, 31))
+        assert dates.to_stac_interval().endswith("23:59:59.999999Z")
+
+    def test_start_today_is_accepted_and_tomorrow_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class FrozenClock(datetime):
+            @classmethod
+            def now(cls, tz: tzinfo | None = None) -> FrozenClock:
+                return cls(2025, 12, 15, 23, 30, tzinfo=tz)
+
+        monkeypatch.setattr(domain, "datetime", FrozenClock)
+        today = {"start": "2025-12-15", "end": "2025-12-15"}
+        assert make_request(dates=today).dates.start == date(2025, 12, 15)
+        tomorrow = {"start": "2025-12-16", "end": "2025-12-16"}
+        with pytest.raises(ValidationError, match="today is 2025-12-15"):
+            make_request(dates=tomorrow)

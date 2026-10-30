@@ -11,20 +11,23 @@ Run it with `make serve-mcp`; it listens on http://127.0.0.1:8001/mcp only.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import date
-from typing import Annotated, Protocol
+from typing import Annotated, Any, Protocol
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.types import ContentBlock, ToolAnnotations
 from pydantic import BaseModel, Field, ValidationError
 
-from agentic_earth_observation.catalog.gazetteer import Gazetteer, Place
+from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary, StacCatalog
 from agentic_earth_observation.domain import MISSION_START, Product, SearchRequest
 
 HOST = "127.0.0.1"
 PORT = 8001
+ISO_DAY = r"^\d{4}-\d{2}-\d{2}$"  # dates as YYYY-MM-DD only, so a number is never read as a timestamp
+SCENE_ID = r"^[A-Za-z0-9_.-]+$"
 
 
 class Catalog(Protocol):
@@ -46,9 +49,15 @@ class ProductList(BaseModel):
     products: list[ProductInfo]
 
 
+class PlaceInfo(BaseModel):
+    key: str
+    name: str
+    bbox: list[float] = Field(description="west, south, east, north: pass it to search_scenes as it is")
+
+
 class PlaceResult(BaseModel):
     found: bool
-    place: Place | None = None
+    place: PlaceInfo | None = None
     suggestions: list[str] = []
 
 
@@ -73,6 +82,32 @@ def explain(err: ValidationError) -> str:
     return "; ".join(parts)
 
 
+class CatalogMCP(FastMCP):
+    """FastMCP that refuses unknown argument names and explains every argument error in plain words.
+
+    By default FastMCP drops arguments it does not know (a misspelt `cloud_cover` would search with no
+    cloud limit, and nobody would notice) and returns pydantic's raw text for arguments of the wrong type.
+    """
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        tool = next((t for t in await self.list_tools() if t.name == name), None)
+        if tool is not None:
+            allowed = set(tool.inputSchema.get("properties", {}))
+            if unknown := sorted(set(arguments) - allowed):
+                raise ToolError(
+                    f"unknown argument(s) for {name}: {', '.join(unknown)}; "
+                    f"the arguments are: {', '.join(sorted(allowed))}"
+                )
+        try:
+            return await super().call_tool(name, arguments)
+        except ToolError as err:
+            if isinstance(err.__cause__, ValidationError):
+                raise ToolError(f"invalid arguments for {name}: {explain(err.__cause__)}") from err.__cause__
+            raise
+
+
 LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False)  # answers from local data only
 CATALOGUE = ToolAnnotations(readOnlyHint=True, openWorldHint=True)  # queries the external catalogue
 
@@ -84,7 +119,7 @@ INSTRUCTIONS = (
 
 def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
     """The MCP server with its four tools, using the given catalogue and gazetteer."""
-    mcp = FastMCP(
+    mcp = CatalogMCP(
         "eo-catalog", instructions=INSTRUCTIONS, host=HOST, port=PORT, stateless_http=True, json_response=True
     )
 
@@ -120,7 +155,8 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
         suggests similar known names: ask the user which one they meant instead of guessing coordinates."""
         place = gazetteer.resolve(name)
         if place:
-            return PlaceResult(found=True, place=place)
+            info = PlaceInfo(key=place.key, name=place.name, bbox=place.bbox.as_list())
+            return PlaceResult(found=True, place=info)
         else:
             return PlaceResult(found=False, suggestions=gazetteer.suggest(name))
 
@@ -128,19 +164,20 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
     async def search_scenes(
         product: Annotated[Product, Field(description="Which product to search; see list_products.")],
         bbox: Annotated[
-            list[float],
+            list[Annotated[float, Field(strict=True)]],
             Field(
                 min_length=4,
                 max_length=4,
                 description="west, south, east, north in degrees, from resolve_place",
             ),
         ],
-        start_date: Annotated[date, Field(description="First day, inclusive (YYYY-MM-DD).")],
-        end_date: Annotated[date, Field(description="Last day, inclusive (YYYY-MM-DD).")],
+        start_date: Annotated[str, Field(pattern=ISO_DAY, description="First day, inclusive (YYYY-MM-DD).")],
+        end_date: Annotated[str, Field(pattern=ISO_DAY, description="Last day, inclusive (YYYY-MM-DD).")],
         max_cloud_cover: Annotated[
-            float | None, Field(description="Sentinel-2 only: maximum cloud cover in percent (0-100).")
+            float | None,
+            Field(strict=True, description="Sentinel-2 only: maximum cloud cover in percent (0-100)."),
         ] = None,
-        limit: Annotated[int, Field(description="Maximum number of scenes, 1-50.")] = 10,
+        limit: Annotated[int, Field(strict=True, description="Maximum number of scenes, 1-50.")] = 10,
     ) -> SearchResult:
         """Search satellite scenes over a bounding box and date range, newest first. Returns scene ids with
         acquisition time and cloud cover. Only cite scene ids that this tool returned."""
@@ -170,7 +207,9 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
     @mcp.tool(annotations=CATALOGUE)
     async def get_scene(
         product: Annotated[Product, Field(description="The product the scene belongs to.")],
-        scene_id: Annotated[str, Field(description="A scene id returned by search_scenes.")],
+        scene_id: Annotated[
+            str, Field(pattern=SCENE_ID, max_length=200, description="A scene id returned by search_scenes.")
+        ],
     ) -> SceneResult:
         """Get one scene by its id. Use it only with ids that search_scenes returned."""
         try:

@@ -10,9 +10,9 @@ import difflib
 import unicodedata
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, field_validator
 
 from agentic_earth_observation.domain import BBox
 
@@ -45,7 +45,7 @@ class _Entry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(min_length=1)
-    aliases: list[str] = []
+    aliases: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]] = []
     bbox: BBox
     osm: str
     kind: str
@@ -101,7 +101,7 @@ class Gazetteer:
 
     def suggest(self, name: str, limit: int = 3) -> list[str]:
         """Up to `limit` known place names that look like `name`, best first (for typos)."""
-        if len(name) > MAX_NAME_LENGTH:
+        if limit < 1 or not name.strip() or len(name) > MAX_NAME_LENGTH:
             return []
         matches = difflib.get_close_matches(normalise(name), list(self._index), n=limit * 3, cutoff=0.6)
         names: list[str] = []

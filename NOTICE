@@ -13,6 +13,6 @@ data/gazetteer.json
 
 tests/cassettes/
   Contains modified Copernicus Sentinel data (2025): scene metadata (identifiers, acquisition times, cloud
-  cover, platform and footprints of Sentinel-1 and Sentinel-2 scenes), retrieved on 2026-10-26 from the
+  cover, platform and footprints of Sentinel-1 and Sentinel-2 scenes), retrieved on 2026-10-30 from the
   Earth Search STAC API by Element 84 (https://earth-search.aws.element84.com/v1) and trimmed to the fields
   used in the tests. Copernicus Sentinel data are provided free of charge under the Copernicus data policy.

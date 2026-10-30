@@ -1,20 +1,26 @@
 """STAC catalogue client: turns a validated SearchRequest into a search and returns safe scene summaries.
 
 The catalogue is an external, untrusted source. Only whitelisted fields leave this module, every returned
-scene is re-checked against the request, and every failure becomes a CatalogError with a readable message.
+scene is re-checked against the request, and every failure becomes a CatalogError with a fixed, readable
+message (the catalogue's own error text is logged, never passed on, because it could carry instructions).
 pystac-client is synchronous; async callers should run these methods in a thread (asyncio.to_thread).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import math
+import threading
+from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pystac import STACError
 from pystac_client import Client
+from pystac_client.errors import ClientTypeError
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
+from urllib3.util.retry import Retry
 
 from agentic_earth_observation.domain import BBox, Product, SearchRequest
 
@@ -45,6 +51,10 @@ _FIELDS = [
 ]
 _NEWEST_FIRST = [{"field": "properties.datetime", "direction": "desc"}]
 
+# Everything pystac-client and the JSON parser raise for a failed or malformed answer (JSON decode errors are
+# ValueErrors; an unexpected shape surfaces as a TypeError, KeyError or AttributeError).
+_CATALOGUE_FAILURES = (APIError, ClientTypeError, STACError, ValueError, TypeError, KeyError, AttributeError)
+
 
 class CatalogError(Exception):
     """The catalogue could not answer: network error, timeout or server error. The message is safe to show."""
@@ -57,9 +67,14 @@ class SceneSummary(BaseModel):
 
     id: str = Field(pattern=r"^[A-Za-z0-9_.-]+$", max_length=200)
     product: Product
-    acquired: datetime
+    acquired: AwareDatetime  # a time without a time zone is ambiguous, so it is refused
     cloud_cover: float | None = Field(default=None, ge=0, le=100)
     platform: str | None = Field(default=None, pattern=r"^[a-z0-9-]+$", max_length=40)
+
+    @field_validator("acquired")
+    @classmethod
+    def _in_utc(cls, value: datetime) -> datetime:
+        return value.astimezone(UTC)  # dates are compared in UTC, like the request's date range
 
 
 class StacCatalog:
@@ -67,8 +82,18 @@ class StacCatalog:
 
     def __init__(self, url: str = EARTH_SEARCH_URL, *, timeout_s: float = 20.0, max_retries: int = 3) -> None:
         self._url = url
-        self._io = StacApiIO(headers={"User-Agent": USER_AGENT}, timeout=timeout_s, max_retries=max_retries)
+        self._timeout_s = timeout_s
+        # Searches are read-only, so retrying a POST is safe; back off on rate limits and server errors.
+        retry = Retry(
+            total=max_retries,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=None,
+            raise_on_status=False,
+        )
+        self._io = StacApiIO(headers={"User-Agent": USER_AGENT}, timeout=timeout_s, max_retries=retry)
         self._client: Client | None = None
+        self._lock = threading.Lock()  # tools call the catalogue from several threads
 
     def search(self, request: SearchRequest) -> list[SceneSummary]:
         """Scenes matching the request, newest first, at most `request.limit`."""
@@ -109,20 +134,29 @@ class StacCatalog:
         scenes = [s for item in items if (s := summarise(item, product, collection)) and s.id == scene_id]
         return scenes[0] if scenes else None
 
+    def _open(self) -> Client:
+        with self._lock:
+            if self._client is None:
+                # Pass the timeout again: Client.open resets the StacApiIO timeout to its own argument.
+                self._client = Client.open(self._url, stac_io=self._io, timeout=self._timeout_s)
+            return self._client
+
     def _fetch(self, what: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         try:
-            if self._client is None:
-                self._client = Client.open(self._url, stac_io=self._io)
-            return list(self._client.search(fields=_FIELDS, **params).items_as_dicts())
-        except APIError as err:
-            raise CatalogError(f"{what} failed: the catalogue at {self._url} did not answer ({err})") from err
+            items = list(self._open().search(fields=_FIELDS, **params).items_as_dicts())
+        except _CATALOGUE_FAILURES as err:
+            status = getattr(err, "status_code", None)
+            logger.warning("%s failed: %s: %.300s", what, type(err).__name__, err)
+            detail = f" (HTTP {status})" if status else ""
+            raise CatalogError(f"{what} failed: the catalogue did not answer correctly{detail}") from err
+        return [item for item in items if isinstance(item, dict)]
 
 
 def summarise(item: dict[str, Any], product: Product, collection: str) -> SceneSummary | None:
     """Whitelist the fields of one raw STAC item; None if it is from another collection or malformed."""
-    if item.get("collection") != collection:
+    properties = item.get("properties")
+    if item.get("collection") != collection or not isinstance(properties, dict):
         return None
-    properties = item.get("properties") or {}
     try:
         return SceneSummary.model_validate(
             {
@@ -145,14 +179,35 @@ def matches(scene: SceneSummary, item: dict[str, Any], request: SearchRequest) -
         scene.cloud_cover is None or scene.cloud_cover > request.max_cloud_cover
     ):
         return False
+    footprint = footprint_boxes(item.get("bbox"))
+    return footprint is not None and any(_intersects(part, request.bbox) for part in footprint)
+
+
+Box = tuple[float, float, float, float]  # west, south, east, north
+
+
+def footprint_boxes(raw: object) -> list[Box] | None:
+    """A scene footprint as one box, or two when it crosses the antimeridian; None if malformed.
+
+    Footprints are not search boxes: they may be large, cross 180 degrees, or carry heights (6 values), so
+    they get their own lenient check instead of the BBox validator.
+    """
+    if not isinstance(raw, list) or len(raw) not in (4, 6):
+        return None
     try:
-        footprint = BBox.model_validate(
-            dict(zip(("west", "south", "east", "north"), item["bbox"], strict=True))
-        )
-    except (KeyError, TypeError, ValueError):
-        return False
-    return _intersects(footprint, request.bbox)
+        values = [float(v) for v in raw]
+    except (TypeError, ValueError):
+        return None
+    west, south, east, north = values if len(values) == 4 else (values[0], values[1], values[3], values[4])
+    if not all(math.isfinite(v) for v in (west, south, east, north)):
+        return None
+    if not (-180 <= west <= 180 and -180 <= east <= 180 and -90 <= south <= north <= 90):
+        return None
+    if west <= east:
+        return [(west, south, east, north)]
+    return [(west, south, 180.0, north), (-180.0, south, east, north)]  # crosses the antimeridian
 
 
-def _intersects(a: BBox, b: BBox) -> bool:
-    return a.west < b.east and b.west < a.east and a.south < b.north and b.south < a.north
+def _intersects(part: Box, box: BBox) -> bool:
+    west, south, east, north = part
+    return west <= box.east and box.west <= east and south <= box.north and box.south <= north

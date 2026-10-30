@@ -7,6 +7,17 @@ from typing import Any
 import pytest
 
 
+def _keep_only_content_type(response: dict[str, Any]) -> dict[str, Any]:
+    """Drop every response header except Content-Type before a response is recorded.
+
+    CDN and server headers (edge location, trace ids, dates) say nothing the tests need, and the edge location
+    reveals roughly where the recording was made.
+    """
+    headers = response.get("headers", {})
+    response["headers"] = {name: value for name, value in headers.items() if name.lower() == "content-type"}
+    return response
+
+
 @pytest.fixture(scope="module")
 def vcr_config() -> dict[str, Any]:
     """Settings for recorded HTTP responses (pytest-recording / vcrpy).
@@ -19,4 +30,5 @@ def vcr_config() -> dict[str, Any]:
         "match_on": ["method", "scheme", "host", "port", "path", "query", "body"],
         "decode_compressed_response": True,
         "filter_headers": ["authorization", "cookie", "set-cookie"],
+        "before_record_response": _keep_only_content_type,
     }

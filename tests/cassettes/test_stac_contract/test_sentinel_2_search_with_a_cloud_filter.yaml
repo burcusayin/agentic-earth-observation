@@ -17,41 +17,13 @@ interactions:
       string: '{"stac_version":"1.0.0","type":"Catalog","id":"earth-search-aws","title":"Earth
         Search by Element 84","description":"A STAC API of public datasets on AWS","links":[{"rel":"self","type":"application/json","href":"https://earth-search.aws.element84.com/v1"},{"rel":"root","type":"application/json","href":"https://earth-search.aws.element84.com/v1"},{"rel":"conformance","type":"application/json","href":"https://earth-search.aws.element84.com/v1/conformance"},{"rel":"data","type":"application/json","href":"https://earth-search.aws.element84.com/v1/collections"},{"rel":"search","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/search","method":"GET"},{"rel":"search","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/search","method":"POST"},{"rel":"aggregate","type":"application/json","href":"https://earth-search.aws.element84.com/v1/aggregate","method":"GET"},{"rel":"aggregations","type":"application/json","href":"https://earth-search.aws.element84.com/v1/aggregations"},{"rel":"service-desc","type":"application/vnd.oai.openapi","href":"https://earth-search.aws.element84.com/v1/api"},{"rel":"service-doc","type":"text/html","href":"https://earth-search.aws.element84.com/v1/api.html"},{"rel":"http://www.opengis.net/def/rel/ogc/1.0/queryables","type":"application/schema+json","href":"https://earth-search.aws.element84.com/v1/queryables"},{"rel":"server","type":"text/html","href":"https://stac-utils.github.io/stac-server/"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-pre-c1-l2a"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/cop-dem-glo-30"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/naip"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/cop-dem-glo-90"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/landsat-c2-l2"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-l1c"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-c1-l2a"},{"rel":"child","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/collections/sentinel-1-grd"}],"conformsTo":["https://api.stacspec.org/v1.0.0/core","https://api.stacspec.org/v1.0.0/collections","https://api.stacspec.org/v1.0.0/ogcapi-features","https://api.stacspec.org/v1.0.0/item-search","https://api.stacspec.org/v1.0.0/ogcapi-features#fields","https://api.stacspec.org/v1.0.0/ogcapi-features#sort","https://api.stacspec.org/v1.0.0/ogcapi-features#query","https://api.stacspec.org/v1.0.0/item-search#fields","https://api.stacspec.org/v1.0.0/item-search#sort","https://api.stacspec.org/v1.0.0/item-search#query","https://api.stacspec.org/v0.3.0/aggregation","http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core","http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30","http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson"]}'
     headers:
-      Connection:
-      - keep-alive
       Content-Type:
       - application/json; charset=utf-8
-      Date:
-      - Mon, 26 Oct 2026 15:57:06 GMT
-      Via:
-      - 1.1 bbd9d159bb628c57ac8e6b69a9d258be.cloudfront.net (CloudFront)
-      X-Amz-Cf-Id:
-      - -_rjVzvcZTqXQkWUuoBswf_royLq8zjMDHzr2MiZ3FfmA0jrce6_Ew==
-      X-Amz-Cf-Pop:
-      - MXP53-P7
-      X-Amzn-Trace-Id:
-      - Root=1-6adf7852-058254c224ba6e5552146505;Parent=58bd64e682db0ecf;Sampled=0;Lineage=1:9e2884e9:0
-      X-Cache:
-      - Miss from cloudfront
-      access-control-allow-origin:
-      - '*'
-      content-length:
-      - '3369'
-      etag:
-      - W/"d29-QPs+H0wJLUX32EZKNgzG3k6wfQ8"
-      x-amz-apigw-id:
-      - F2-8-FVdvHcEHNQ=
-      x-amzn-Remapped-content-length:
-      - '3369'
-      x-amzn-RequestId:
-      - ede41106-f917-4f06-b8b1-9884844ac1c3
-      x-powered-by:
-      - Express
     status:
       code: 200
       message: OK
 - request:
-    body: '{"limit": 3, "bbox": [12.35, 41.78, 12.65, 42.0], "datetime": "2025-07-01T00:00:00Z/2025-07-31T23:59:59Z",
+    body: '{"limit": 3, "bbox": [12.35, 41.78, 12.65, 42.0], "datetime": "2025-07-01T00:00:00Z/2025-07-31T23:59:59.999999Z",
       "collections": ["sentinel-2-c1-l2a"], "query": {"eo:cloud_cover": {"lte": 10.0}},
       "sortby": [{"field": "properties.datetime", "direction": "desc"}], "fields":
       {"include": ["id", "collection", "bbox", "properties.datetime", "properties.eo:cloud_cover",
@@ -64,7 +36,7 @@ interactions:
       Connection:
       - keep-alive
       Content-Length:
-      - '427'
+      - '434'
       Content-Type:
       - application/json
       User-Agent:
@@ -74,38 +46,10 @@ interactions:
   response:
     body:
       string: '{"type":"FeatureCollection","stac_version":"1.0.0","stac_extensions":[],"context":{"limit":3,"matched":13,"returned":3},"numberMatched":13,"numberReturned":3,"features":[{"stac_version":"1.0.0","bbox":[11.354967,41.407736,12.723021,42.429352],"id":"S2A_T33TTG_20250730T100227_L2A","collection":"sentinel-2-c1-l2a","type":"Feature","properties":{"datetime":"2025-07-30T10:09:29.992000Z","eo:cloud_cover":4.139698,"platform":"sentinel-2a"}},{"stac_version":"1.0.0","bbox":[11.393473,41.404044,12.763124,42.426903],"id":"S2A_T32TQM_20250730T100227_L2A","collection":"sentinel-2-c1-l2a","type":"Feature","properties":{"datetime":"2025-07-30T10:09:29.937000Z","eo:cloud_cover":4.30274,"platform":"sentinel-2a"}},{"stac_version":"1.0.0","bbox":[12.568816,41.438846,13.919961,42.447434],"id":"S2A_T33TUG_20250720T100505_L2A","collection":"sentinel-2-c1-l2a","type":"Feature","properties":{"datetime":"2025-07-20T10:09:27.478000Z","eo:cloud_cover":0.007628,"platform":"sentinel-2a"}}],"links":[{"rel":"next","title":"Next
-        page of Items","method":"POST","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/search","merge":false,"body":{"datetime":"2025-07-01T00:00:00Z/2025-07-31T23:59:59Z","query":{"eo:cloud_cover":{"lte":10}},"sortby":[{"field":"properties.datetime","direction":"desc"}],"fields":{"include":["id","collection","bbox","properties.datetime","properties.eo:cloud_cover","properties.platform"],"exclude":["assets","links","geometry"]},"collections":["sentinel-2-c1-l2a"],"bbox":[12.35,41.78,12.65,42],"limit":3,"next":"2025-07-20T10:09:27.478000Z"}},{"rel":"root","type":"application/json","href":"https://earth-search.aws.element84.com/v1"}]}'
+        page of Items","method":"POST","type":"application/geo+json","href":"https://earth-search.aws.element84.com/v1/search","merge":false,"body":{"datetime":"2025-07-01T00:00:00Z/2025-07-31T23:59:59.999999Z","query":{"eo:cloud_cover":{"lte":10}},"sortby":[{"field":"properties.datetime","direction":"desc"}],"fields":{"include":["id","collection","bbox","properties.datetime","properties.eo:cloud_cover","properties.platform"],"exclude":["assets","links","geometry"]},"collections":["sentinel-2-c1-l2a"],"bbox":[12.35,41.78,12.65,42],"limit":3,"next":"2025-07-20T10:09:27.478000Z"}},{"rel":"root","type":"application/json","href":"https://earth-search.aws.element84.com/v1"}]}'
     headers:
-      Connection:
-      - keep-alive
       Content-Type:
       - application/geo+json; charset=utf-8
-      Date:
-      - Mon, 26 Oct 2026 15:57:07 GMT
-      Via:
-      - 1.1 307721c08a58ae488fe2d34e1db98980.cloudfront.net (CloudFront)
-      X-Amz-Cf-Id:
-      - r-Par__ICjy7aVY-9_lsGfGodXVmTSpNC6jtMxuDeFzXFu7GTC8-DA==
-      X-Amz-Cf-Pop:
-      - MXP53-P7
-      X-Amzn-Trace-Id:
-      - Root=1-6adf7853-6cd2c2a514c7a5370926fad7;Parent=297c6d3d44b1ab3b;Sampled=0;Lineage=1:9e2884e9:0
-      X-Cache:
-      - Miss from cloudfront
-      access-control-allow-origin:
-      - '*'
-      content-length:
-      - '1678'
-      etag:
-      - W/"68e-GiNnNFHWig+p8rDS6BUnvP+PJTs"
-      x-amz-apigw-id:
-      - F2-9FHAJvHcEOJA=
-      x-amzn-Remapped-content-length:
-      - '1678'
-      x-amzn-RequestId:
-      - 1ddefc11-9f73-426b-9580-2c6ef040c132
-      x-powered-by:
-      - Express
     status:
       code: 200
       message: OK

@@ -13,6 +13,10 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Validated types reject unknown fields (a misspelt argument must not be dropped silently)
+# and are strict about numbers (True is not 1, "10" is not 10).
+_STRICT = ConfigDict(frozen=True, extra="forbid", strict=True)
+
 
 class Product(StrEnum):
     """Products offered by the catalogue tools. The values are the names a model sees; backends map them."""
@@ -27,12 +31,13 @@ MISSION_START: dict[Product, date] = {
 }
 MAX_BBOX_AREA_DEG2 = 25.0  # about 5 x 5 degrees: a region, not a continent
 MAX_RANGE_DAYS = 366
+_AREA_TOLERANCE = 1e-9  # so that a box exactly at the limit is not rejected by floating-point rounding
 
 
 class BBox(BaseModel):
     """A longitude/latitude bounding box in degrees, in STAC order: west, south, east, north."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     west: float
     south: float
@@ -41,14 +46,7 @@ class BBox(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        #   1. A value that is not finite (NaN or infinity). Check this first: comparisons with NaN are always
-        #      False, so the later checks would silently pass. Hint: math.isfinite.
-        #   2. A longitude outside [-180, 180] or a latitude outside [-90, 90].
-        #      The message must mention "range".
-        #   3. west >= east. This also catches boxes crossing the antimeridian (west 179, east -179): mention
-        #      "antimeridian" in the message and suggest splitting the box in two.
-        #   4. south >= north.
-        #   5. An area (width x height, in square degrees) above MAX_BBOX_AREA_DEG2. Mention "area".
+        # Finite values first: comparisons with NaN are always False, so the later checks would pass silently.
         values = self.as_list()
         if not all(math.isfinite(v) for v in values):
             raise ValueError("All bounding box values must be finite numbers (not NaN or infinity).")
@@ -70,12 +68,15 @@ class BBox(BaseModel):
                 "split it into two boxes, one on each side."
             )
         if self.south >= self.north:
-            raise ValueError("Bounding box south coordinate must be less than north coordinate.")
+            raise ValueError(
+                f"south must be less than north (got south={self.south}, north={self.north}); "
+                "swap them if they are reversed."
+            )
         area = (self.east - self.west) * (self.north - self.south)
-        if area > MAX_BBOX_AREA_DEG2:
+        if area > MAX_BBOX_AREA_DEG2 + _AREA_TOLERANCE:
             raise ValueError(
                 f"Bounding box area {area:.2f} exceeds the maximum allowed area "
-                f"of {MAX_BBOX_AREA_DEG2:.2f} square degrees."
+                f"of {MAX_BBOX_AREA_DEG2:.2f} square degrees; search a smaller area or split it."
             )
         return self
 
@@ -86,49 +87,40 @@ class BBox(BaseModel):
 class DateRange(BaseModel):
     """An inclusive range of calendar days, in UTC."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")  # not strict: dates arrive as ISO strings
 
     start: date
     end: date
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        #   1. start after end: the message must mention "start".
-        #   2. More than MAX_RANGE_DAYS days, counting both the first and the last day: the message must
-        #      mention the limit (366). Hint: (self.end - self.start).days + 1 is the number of days.
         if self.start > self.end:
-            raise ValueError("Start date must not be after end date.")
+            raise ValueError(f"Start date {self.start} must not be after end date {self.end}.")
         if (self.end - self.start).days + 1 > MAX_RANGE_DAYS:
             raise ValueError(f"Date range exceeds the maximum allowed range of {MAX_RANGE_DAYS} days.")
         return self
 
     def to_stac_interval(self) -> str:
-        """The STAC `datetime` parameter: first second of `start` to last second of `end`, in UTC."""
+        """The STAC `datetime` parameter: from the start of `start` to the very end of `end`, in UTC."""
         first = datetime.combine(self.start, time.min, tzinfo=UTC)
-        last = datetime.combine(self.end, time(23, 59, 59), tzinfo=UTC)
-        return f"{first:%Y-%m-%dT%H:%M:%SZ}/{last:%Y-%m-%dT%H:%M:%SZ}"
+        last = datetime.combine(self.end, time.max, tzinfo=UTC)  # 23:59:59.999999, so no late scene is missed
+        return f"{first:%Y-%m-%dT%H:%M:%SZ}/{last:%Y-%m-%dT%H:%M:%S.%fZ}"
 
 
 class SearchRequest(BaseModel):
     """One scene search, as the catalogue receives it."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     product: Product
     bbox: BBox
     dates: DateRange
-    max_cloud_cover: float | None = Field(default=None, ge=0, le=100)
-    limit: int = Field(default=10, ge=1, le=50)
+    max_cloud_cover: float | None = Field(default=None, ge=0, le=100, strict=True)
+    limit: int = Field(default=10, ge=1, le=50, strict=True)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        #   1. max_cloud_cover is set for Sentinel-1: radar is not affected by clouds, so the filter is
-        #      meaningless.
-        #      The message must mention "Sentinel-1" and say to drop the filter.
-        #   2. dates.start before the product's MISSION_START: the message must name the first available date
-        #      (e.g. 2015-06-23).
-        #   3. dates.start after today (UTC): no scenes exist yet. The message must mention "future".
-        #      Hint: datetime.now(UTC).date() is today in UTC.
+        # Radar sees through clouds, so a cloud filter on Sentinel-1 is meaningless rather than harmless.
         if self.product == Product.SENTINEL_1_GRD and self.max_cloud_cover is not None:
             raise ValueError(
                 "max_cloud_cover filter is not applicable "
@@ -139,6 +131,10 @@ class SearchRequest(BaseModel):
                 f"Start date {self.dates.start} is before the mission start date "
                 f"{MISSION_START[self.product]} for product {self.product}."
             )
-        if self.dates.start > datetime.now(UTC).date():
-            raise ValueError(f"Start date {self.dates.start} is in the future. No scenes exist yet.")
+        today = datetime.now(UTC).date()
+        if self.dates.start > today:
+            raise ValueError(
+                f"Start date {self.dates.start} is in the future (today is {today} in UTC); "
+                "no scenes exist yet."
+            )
         return self
