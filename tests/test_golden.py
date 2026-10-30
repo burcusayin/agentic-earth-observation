@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
-from agentic_earth_observation.evals.golden import Task, check_tasks, load_golden
+from agentic_earth_observation.evals.golden import Task, check_tasks, evaluation_code_hash, load_golden
 
 
 def task(**overrides: object) -> dict[str, Any]:
@@ -115,7 +115,7 @@ def test_finds_duplicate_ids(gazetteer: Gazetteer) -> None:
 def test_the_committed_golden_set_is_valid_and_complete() -> None:
     tasks = load_golden()
     assert sum(t.split == "dev" for t in tasks) == 4
-    assert sum(t.split == "test" for t in tasks) == 16
+    assert sum(t.split == "test" for t in tasks) == 18
 
 
 def test_dev_and_test_use_different_places() -> None:
@@ -130,3 +130,10 @@ def test_dev_and_test_use_different_places() -> None:
         }
 
     assert places("dev").isdisjoint(places("test"))
+
+
+def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:
+    first = evaluation_code_hash()
+    assert first == evaluation_code_hash()
+    assert len(first) == 64
+    assert all(c in "0123456789abcdef" for c in first)

@@ -25,7 +25,7 @@ class GazetteerError(Exception):
 
 
 def normalise(text: str) -> str:
-    """Case-, accent- and whitespace-insensitive form of a name: '  MÜNCHEN ' -> 'munchen'."""
+    """Case-, accent- and space-insensitive form of a name: ' CITTÀ di  Napoli' -> 'citta di napoli'."""
     decomposed = unicodedata.normalize("NFKD", text)
     without_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
     return " ".join(without_accents.casefold().split())
@@ -73,6 +73,7 @@ class Gazetteer:
 
     def __init__(self, entries: dict[str, _Entry]) -> None:
         self._places: dict[str, Place] = {}
+        self._entries = dict(entries)
         self._index: dict[str, str] = {}
         for key, entry in entries.items():
             self._places[key] = Place(key=key, name=entry.name, bbox=entry.bbox)
@@ -110,6 +111,11 @@ class Gazetteer:
             if place_name not in names:
                 names.append(place_name)
         return names[:limit]
+
+    def names_of(self, key: str) -> list[str]:
+        """Every name and alias of the place with this key, as written in the gazetteer."""
+        entry = self._entries.get(key)
+        return [] if entry is None else [key, entry.name, *entry.aliases]
 
     def known_places(self) -> list[str]:
         """The display names of all places, sorted."""

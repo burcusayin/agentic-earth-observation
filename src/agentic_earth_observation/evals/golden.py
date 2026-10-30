@@ -202,6 +202,14 @@ def golden_hash(golden_dir: Path = GOLDEN_DIR) -> str:
     return digest.hexdigest()
 
 
+def evaluation_code_hash() -> str:
+    """SHA-256 over the evaluation code (task validation and scoring), recorded with every run."""
+    digest = hashlib.sha256()
+    for name in ("golden.py", "scoring.py"):
+        digest.update((Path(__file__).resolve().parent / name).read_bytes())
+    return digest.hexdigest()
+
+
 def main() -> None:
     tasks = load_golden()
     for split in SPLITS:
@@ -211,6 +219,7 @@ def main() -> None:
             + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
         )
     print(f"golden hash: {golden_hash()[:16]}")
+    print(f"evaluation code hash: {evaluation_code_hash()[:16]}")
 
 
 if __name__ == "__main__":

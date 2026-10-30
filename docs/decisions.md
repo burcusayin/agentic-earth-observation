@@ -43,3 +43,25 @@ decision is made or reversed; do not rewrite old entries.
   - Failure cases come from natural situations (unknown place, no results, out of scope) rather than fault
     injection.
   - The rest is listed as follow-up work in the README roadmap.
+
+## 2026-10-30
+- **The gazetteer is built from OpenStreetMap** (Nominatim, ten places, names in several languages as aliases),
+  replacing the hand-typed boxes. It is ODbL-licensed and credited in `NOTICE`.
+- **The package is named `agentic_earth_observation`**, like the repository.
+- **Tool arguments are strict.** Unknown argument names are refused rather than dropped; booleans and text are
+  not accepted as numbers; dates are `YYYY-MM-DD` only.
+- **Catalogue errors never reach a model verbatim.** The model sees a fixed message; the details are logged.
+- **Evaluation, before the freeze**, following an independent review:
+  - 22 tasks (4 dev, 18 test), with a "no results" task and a misspelt-place task added.
+  - Every expected search was checked against Earth Search.
+  - The labelling rules are written generically and contain no test answers. A test checks that system code
+    never mentions test-split places or questions.
+  - Box overlap threshold 0.98 (3-decimal rounding passes, 2-decimal fails). Exact dates. Cloud as accepted
+    ranges.
+  - The route is observed from behaviour. Status is checked on search turns. No scene may be cited when the
+    right answer is a refusal, an error or "none found".
+  - Malformed calls and running out of steps count as model failures.
+  - Statistics are reported as counts with intervals and exact sign tests; small differences are not
+    claimed.
+- **What is frozen** at tag `golden-test-v1`: the test split, the gazetteer, the rules and scoring in
+  `docs/evaluation.md`, and the evaluation code (hashed into every run record).

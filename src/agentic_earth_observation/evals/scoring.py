@@ -15,7 +15,10 @@ from pydantic import BaseModel, ConfigDict
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.evals.golden import Expectation, ExpectedSearch, Outcome, Route
 
-MIN_BBOX_IOU = 0.95
+# 0.98: a box rounded to 3 decimals always passes and one rounded to 2 always fails, for every gazetteer
+# place, so the threshold rewards copying the resolve_place box, not luck in rounding.
+MIN_BBOX_IOU = 0.98
+DEFAULT_LIMIT = 10  # the tool's default, so passing it explicitly is the same as leaving it out
 SEARCH_ARGUMENTS = frozenset({"product", "bbox", "start_date", "end_date", "max_cloud_cover", "limit"})
 
 BBox = tuple[float, float, float, float]  # west, south, east, north
@@ -131,13 +134,18 @@ def score_arguments(
     if expected.cloud is None:
         cloud_ok = cloud is None
     else:
-        cloud_ok = isinstance(cloud, int | float) and expected.cloud[0] <= cloud <= expected.cloud[1]
+        cloud_ok = (
+            isinstance(cloud, int | float)
+            and not isinstance(cloud, bool)
+            and expected.cloud[0] <= cloud <= expected.cloud[1]
+        )
     return ArgumentScore(
         product=arguments.get("product") == expected.product.value,
         bbox=bbox_ok,
         dates=dates_ok,
         cloud=cloud_ok,
-        limit=expected.limit is None or arguments.get("limit") == expected.limit,
+        # An unasked limit must be absent or the default; an asked one must match exactly.
+        limit=arguments.get("limit", DEFAULT_LIMIT) == (expected.limit or DEFAULT_LIMIT),
         no_extra=set(arguments) <= SEARCH_ARGUMENTS,
     )
 
@@ -151,7 +159,9 @@ def score_turn(
     successful = [call for call in searches if call.ok]
 
     arguments = first_arguments = None
-    if expect.search is not None:
+    # Arguments are scored when a search was expected and the system delegated. If it took another route that
+    # the task also accepts, there is nothing to score; any other route fails on `route` already.
+    if expect.search is not None and (trace.route is Route.DELEGATE or trace.route not in expect.routes):
         arguments = (
             score_arguments(expect.search, successful[-1].arguments, gazetteer)
             if successful
@@ -162,13 +172,23 @@ def score_turn(
         )
 
     returned = known_ids | {scene_id for call in trace.calls for scene_id in call.returned_ids}
+    if expect.outcomes is not None:
+        statuses: frozenset[str] = frozenset(expect.outcomes)
+    elif expect.search is not None:
+        # A search turn should end "ok" when the scored search found scenes and "empty" when it found none.
+        statuses = frozenset({"ok" if successful and successful[-1].returned_ids else "empty"})
+    else:
+        statuses = frozenset({trace.status})
+    # When the right answer is a refusal, an error or "none found", citing scenes means something was invented
+    # or substituted (for example a different year searched instead of the one asked for).
+    cites_allowed = "ok" in statuses
     return TurnScore(
         route=trace.route in expect.routes,
         tools=tools_in_order(called, expect.required_tools) and not set(called) & set(expect.forbidden_tools),
         arguments=arguments,
         first_arguments=first_arguments,
         grounded=set(trace.cited_ids) <= returned,
-        outcome=expect.outcomes is None or trace.status in expect.outcomes,
+        outcome=trace.status in statuses and (cites_allowed or not trace.cited_ids),
     )
 
 

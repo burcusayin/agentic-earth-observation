@@ -67,7 +67,7 @@ def trace(
         "route": "delegate",
         "calls": calls,
         "status": "ok",
-        "cited_ids": cited or IDS[:1],
+        "cited_ids": IDS[:1] if cited is None else cited,
     }
     values.update(fields)
     return TurnTrace.model_validate(values)
@@ -177,3 +177,50 @@ def test_retrieval_metrics() -> None:
     assert retrieval_metrics(IDS[:1], IDS, limit=1) == (1.0, 1.0)  # recall only up to the requested limit
     assert retrieval_metrics(["not-in-oracle"], IDS, limit=10) == (0.0, 0.0)
     assert retrieval_metrics([], [], limit=10) == (1.0, 1.0)  # nothing exists, nothing returned: correct
+
+
+class TestRulesAddedInReview:
+    def test_an_unasked_limit_must_be_absent_or_the_default(self, gazetteer: Gazetteer) -> None:
+        assert score_arguments(SEARCH, GOOD_ARGUMENTS, gazetteer).limit
+        assert score_arguments(SEARCH, {**GOOD_ARGUMENTS, "limit": 10}, gazetteer).limit
+        assert not score_arguments(SEARCH, {**GOOD_ARGUMENTS, "limit": 1}, gazetteer).limit
+
+    def test_a_box_rounded_to_three_decimals_passes_and_to_two_fails(self, gazetteer: Gazetteer) -> None:
+        three = [round(v, 3) for v in FLORENCE]
+        two = [round(v, 2) for v in FLORENCE]
+        assert score_arguments(SEARCH, {**GOOD_ARGUMENTS, "bbox": three}, gazetteer).bbox
+        assert not score_arguments(SEARCH, {**GOOD_ARGUMENTS, "bbox": two}, gazetteer).bbox
+
+    def test_a_boolean_is_not_a_cloud_limit(self, gazetteer: Gazetteer) -> None:
+        assert not score_arguments(SEARCH, {**GOOD_ARGUMENTS, "max_cloud_cover": True}, gazetteer).cloud
+
+    def test_a_search_turn_must_report_what_the_search_found(self, gazetteer: Gazetteer) -> None:
+        assert not score_turn(EXPECT, trace(status="empty"), gazetteer).outcome  # scenes were found
+        calls = [ToolCall(name="resolve_place"), ToolCall(name="search_scenes", arguments=GOOD_ARGUMENTS)]
+        nothing = trace(calls=calls, cited=[], status="empty")
+        assert score_turn(EXPECT, nothing, gazetteer).passed
+        assert not score_turn(EXPECT, trace(calls=calls, cited=[], status="ok"), gazetteer).outcome
+
+    def test_citing_scenes_fails_when_the_right_answer_is_a_refusal(self, gazetteer: Gazetteer) -> None:
+        # Asked for 2014 (before launch), searched 2015 instead and cited real scenes: not what was asked.
+        either = Expectation.model_validate(
+            {"route": ["delegate", "decline"], "outcomes": ["error", "declined"]}
+        )
+        substituted = trace(status="error")
+        assert substituted.cited_ids
+        assert not score_turn(either, substituted, gazetteer).outcome
+
+    def test_an_accepted_non_delegate_route_is_not_penalised_for_not_searching(
+        self, gazetteer: Gazetteer
+    ) -> None:
+        searched_or_declined = Expectation.model_validate(
+            {
+                "route": ["delegate", "decline"],
+                "required_tools": ["search_scenes"],
+                "search": EXPECT.search.model_dump(mode="json") if EXPECT.search else {},
+                "outcomes": ["ok", "declined"],
+            }
+        )
+        score = score_turn(searched_or_declined, TurnTrace(route=Route.DECLINE, status="declined"), gazetteer)
+        assert score.arguments is None
+        assert score.route

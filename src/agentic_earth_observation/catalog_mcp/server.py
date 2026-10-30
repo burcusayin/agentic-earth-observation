@@ -149,7 +149,7 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
 
     @mcp.tool(annotations=LOCAL)
     def resolve_place(
-        name: Annotated[str, Field(description="A place name in any language, e.g. 'Rome' or 'Gardasee'.")],
+        name: Annotated[str, Field(description="A place name in any language, e.g. 'Milan' or 'Napoli'.")],
     ) -> PlaceResult:
         """Find a known place by name and return its bounding box. If it is unknown, the result says so and
         suggests similar known names: ask the user which one they meant instead of guessing coordinates."""
@@ -201,7 +201,10 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
 
         note = None
         if not scenes:
-            note = "No scenes match. Try a longer date range, or a higher cloud limit for Sentinel-2."
+            note = (
+                "No scenes match this search. Tell the user so; do not widen the dates or the cloud limit "
+                "unless they ask."
+            )
         return SearchResult(count=len(scenes), scenes=scenes, note=note)
 
     @mcp.tool(annotations=CATALOGUE)

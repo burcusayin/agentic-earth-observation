@@ -73,8 +73,9 @@ make hooks     # every pre-commit hook on every file, including gitleaks and the
 
 ## Evaluation integrity
 
-- **What is frozen:** the golden test split, its scoring tolerances and `data/gazetteer.json`, from tag
-  `golden-test-v1` onwards.
+- **What is frozen:** from tag `golden-test-v1` onwards, the golden test split, `data/gazetteer.json`, the
+  labelling rules and scoring in `docs/evaluation.md`, and the evaluation code (`evals/golden.py`,
+  `evals/scoring.py`, including the reference date and thresholds).
   - Before the tag, ask before editing them. After it, never edit them.
   - A fix needs a dated decision and a new tag.
 - **No leakage:** never use the test split's places, dates or wording in prompts, tool descriptions or few-shot
