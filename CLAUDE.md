@@ -14,13 +14,14 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
   - Read it before proposing a change of scope or design.
   - Add a dated entry when a decision is made or reversed.
 - `src/eo_agent_demo/`:
-  - `catalog_mcp/`: the MCP server; no LLM.
-  - `retrieval_agent/`: the LangGraph agent and its A2A server.
-  - `orchestrator/`: the LangGraph orchestrator; an A2A client.
-  - `evals/`: `scoring.py` and `run_eval.py`.
-- **Status:** only `evals/scoring.py` is implemented. The other modules are stubs whose milestone labels predate
-  the README roadmap; the roadmap wins.
-- `data/` holds the gazetteer and the golden set; `tests/` holds the tests.
+  - `domain.py`: validated types for every search (product, bbox, dates, cloud cover, limit).
+  - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
+  - `catalog_mcp/`: the MCP server with four tools; no LLM.
+  - `retrieval_agent/`: the LangGraph agent and its A2A server (not yet implemented).
+  - `orchestrator/`: the LangGraph orchestrator; an A2A client (not yet implemented).
+  - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
+- `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
+  catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 
 ## Commands
 
