@@ -3,5 +3,17 @@ Copyright 2026 Burcu Sayin
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-Data attributions are added here as data files enter the repository, with
-their source, licence and retrieval date.
+Data attributions
+
+data/gazetteer.json
+  Place names and bounding boxes derived from OpenStreetMap data, (c) OpenStreetMap contributors, retrieved
+  on 2026-10-26 through Nominatim (https://nominatim.openstreetmap.org). This file is made available under
+  the Open Database License (ODbL) 1.0: https://opendatacommons.org/licenses/odbl/1-0/. The rest of the
+  repository is licensed under the Apache License 2.0.
+
+tests/cassettes/
+  Contains modified Copernicus Sentinel data (2025): scene metadata (identifiers, acquisition times, cloud
+  cover, platform and footprints of Sentinel-1 and Sentinel-2 scenes), retrieved on 2026-10-30 from the
+  Earth Search STAC API by Element 84 (https://earth-search.aws.element84.com/v1) and trimmed to the fields
+  used in the tests. Copernicus Sentinel data are provided free of charge under the Copernicus data policy:
+  https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice

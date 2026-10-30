@@ -1,7 +1,9 @@
 .DEFAULT_GOAL := help
 UV ?= uv
 
-.PHONY: help setup lint format format-check typecheck test check hooks clean
+INSPECTOR_VERSION := 2.12.0
+
+.PHONY: help setup lint format format-check typecheck test check hooks clean serve-mcp inspector
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -19,7 +21,7 @@ format: ## Format with ruff
 format-check: ## Fail if any file needs formatting
 	$(UV) run ruff format --check .
 
-typecheck: ## Type-check src and tests with mypy --strict
+typecheck: ## Type-check src, tests and scripts with mypy --strict
 	$(UV) run mypy
 
 test: ## Run unit and contract tests with coverage (no network, no models)
@@ -30,5 +32,12 @@ check: lint format-check typecheck test ## Everything CI runs; must pass before 
 hooks: ## Run every pre-commit hook on all files
 	$(UV) run pre-commit run --all-files
 
+serve-mcp: ## Run the catalogue MCP server on http://127.0.0.1:8001/mcp (Ctrl+C to stop)
+	$(UV) run python -m agentic_earth_observation.catalog_mcp.server
+
+inspector: ## Open the MCP Inspector on the running catalogue server (needs Node; start make serve-mcp first)
+	npx -y @modelcontextprotocol/inspector@$(INSPECTOR_VERSION) --server-url http://127.0.0.1:8001/mcp --transport http
+
 clean: ## Remove caches and coverage output
 	rm -rf .mypy_cache .ruff_cache .pytest_cache .coverage htmlcov
+	find src tests scripts -name __pycache__ -type d -prune -exec rm -rf {} +

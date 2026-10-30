@@ -16,24 +16,34 @@
       "Bash(git diff *)",
       "Bash(git log *)",
       "Bash(git show *)",
-      "Bash(git branch *)"
+      "Bash(git branch)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch --list *)"
     ],
     "ask": [
       "Bash(git push *)",
+      "Bash(git tag *)",
       "Bash(gh pr create *)",
       "Bash(uv add *)",
       "Bash(uv remove *)",
-      "Bash(uv run pytest -m live *)"
+      "Bash(uv run pytest *--record-mode*)",
+      "Bash(uv run pytest *--allowed-hosts*)",
+      "Bash(uv run pytest *live*)"
     ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.local)",
+      "Read(./.envrc)",
       "Read(./secrets/**)",
       "Read(./**/*.pem)",
       "Read(./**/*.key)",
-      "Bash(git push --force *)",
-      "Bash(git push -f *)",
-      "Bash(git commit --no-verify *)",
+      "Bash(git push *--force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *+*)",
+      "Bash(git commit --no-verify*)",
+      "Bash(git commit *--no-verify*)",
+      "Bash(git commit -n *)",
+      "Bash(git commit * -n *)",
       "Bash(gh pr merge *)"
     ]
   },

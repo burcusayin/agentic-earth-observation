@@ -10,17 +10,18 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
 
 - Scope is **Milestone 1** in the README roadmap. Work on follow-up items (recorded catalogue, fault injection,
   CDSE, Phoenix, skills, demo mode) only when asked.
-- `docs/decisions.md`: dated technical decisions with their reasons. It holds no budgets or accounts.
+- `docs/decisions.md`: dated technical decisions with their reasons.
   - Read it before proposing a change of scope or design.
   - Add a dated entry when a decision is made or reversed.
-- `src/eo_agent_demo/`:
-  - `catalog_mcp/`: the MCP server; no LLM.
-  - `retrieval_agent/`: the LangGraph agent and its A2A server.
-  - `orchestrator/`: the LangGraph orchestrator; an A2A client.
-  - `evals/`: `scoring.py` and `run_eval.py`.
-- **Status:** only `evals/scoring.py` is implemented. The other modules are stubs whose milestone labels predate
-  the README roadmap; the roadmap wins.
-- `data/` holds the gazetteer and the golden set; `tests/` holds the tests.
+- `src/agentic_earth_observation/`:
+  - `domain.py`: validated types for every search (product, bbox, dates, cloud cover, limit).
+  - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
+  - `catalog_mcp/`: the MCP server with four tools; no LLM.
+  - `retrieval_agent/`: the LangGraph agent and its A2A server (not yet implemented).
+  - `orchestrator/`: the LangGraph orchestrator; an A2A client (not yet implemented).
+  - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
+- `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
+  catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 
 ## Commands
 
@@ -40,7 +41,9 @@ make hooks     # every pre-commit hook on every file, including gitleaks and the
 - **Tests that need more than the default run:**
   - Default: tests marked `integration` (local servers and Ollama) or `live` (a public API or a paid model) are
     skipped.
-  - Run integration tests with `uv run pytest -m integration`.
+  - Every test run blocks network access (`--block-network`); contract tests replay recorded responses
+    from `tests/cassettes/`.
+  - Run integration tests with `uv run pytest -m integration --allowed-hosts=127.0.0.1,localhost`.
   - Run `live` tests only when asked; they never run in CI.
 
 ## How to work here
@@ -70,8 +73,9 @@ make hooks     # every pre-commit hook on every file, including gitleaks and the
 
 ## Evaluation integrity
 
-- **What is frozen:** the golden test split, its scoring tolerances and `data/gazetteer.json`, from tag
-  `golden-test-v1` onwards.
+- **What is frozen:** from tag `golden-test-v1` onwards, the golden test split, `data/gazetteer.json`, the
+  labelling rules and scoring in `docs/evaluation.md`, and the evaluation code (`evals/golden.py`,
+  `evals/scoring.py`, including the reference date and thresholds).
   - Before the tag, ask before editing them. After it, never edit them.
   - A fix needs a dated decision and a new tag.
 - **No leakage:** never use the test split's places, dates or wording in prompts, tool descriptions or few-shot

@@ -23,9 +23,11 @@ dependencies = [
     "uvicorn>=0.54,<1",
 ]
 
+[project.urls]
+Repository = "https://github.com/burcusayin/agentic-earth-observation"
+
 [dependency-groups]
 dev = [
-    "hypothesis>=6.168",
     "mypy==2.4.0",
     "pre-commit>=4.6",
     "pytest>=9.1",
@@ -34,12 +36,15 @@ dev = [
     "ruff==0.16.10",
 ]
 
+[tool.uv]
+required-version = ">=0.12.23"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/eo_agent_demo"]
+packages = ["src/agentic_earth_observation"]
 
 [tool.ruff]
 line-length = 110
@@ -55,19 +60,19 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "S", "PT", "ANN"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 warn_unreachable = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not integration and not live"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--block-network", "-m", "not integration and not live"]
 markers = [
-    "integration: needs local servers and Ollama; run with `uv run pytest -m integration`",
+    "integration: needs local servers and Ollama; run with `uv run pytest -m integration --allowed-hosts=127.0.0.1,localhost`",
     "live: calls a public API or a paid model; never runs in CI",
 ]
 
 [tool.coverage.run]
-source = ["eo_agent_demo"]
+source = ["agentic_earth_observation"]
 branch = true
 
 [tool.coverage.report]
