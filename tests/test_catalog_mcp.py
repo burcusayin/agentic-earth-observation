@@ -252,3 +252,29 @@ async def test_dns_rebinding_protection_is_on_for_localhost_only() -> None:
     assert security is not None
     assert security.enable_dns_rebinding_protection
     assert all(host.startswith(("127.0.0.1", "localhost", "[::1]")) for host in security.allowed_hosts)
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ({"max_cloud_cover": "20"}, 'max_cloud_cover: must be a number such as 20, not the text "20"'),
+        ({"max_cloud_cover": True}, "max_cloud_cover: must be a number, not true"),
+        ({"limit": "5"}, 'limit: must be a whole number such as 5, not the text "5"'),
+        ({"limit": 2.5}, "limit: must be a whole number such as 2, not 2.5"),
+    ],
+)
+async def test_wrong_number_types_get_a_message_that_says_how_to_fix_them(
+    change: dict[str, Any], expected: str
+) -> None:
+    result = await call(server(), "search_scenes", {**ROME_JULY, **change})
+    assert result.isError
+    assert expected in error_text(result)
+
+
+async def test_the_cloud_limit_is_advertised_as_a_plain_optional_number() -> None:
+    async with create_connected_server_and_client_session(server()) as session:
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+    schema = tools["search_scenes"].inputSchema
+    assert schema["properties"]["max_cloud_cover"]["type"] == "number"
+    assert "anyOf" not in schema["properties"]["max_cloud_cover"]
+    assert "max_cloud_cover" not in schema.get("required", [])

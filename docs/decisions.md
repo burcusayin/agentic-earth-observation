@@ -71,3 +71,17 @@ decision is made or reversed; do not rewrite old entries.
   2026-10-09).
 - **CI also runs the commit checks** (including the gitleaks secret scan), and the uv version is pinned in CI.
 - **Commit messages are checked** for co-author lines and private strings by a commit-msg hook.
+- **Findings from the model probe** (`scripts/probe_models.py`; dev questions only; both local models):
+  - Both call tools natively, resolve the place first, copy the box exactly, and handle the radar question
+    correctly.
+  - qwen3.5:9b sent the optional cloud limit as text ("20") when the schema said "number or null". It
+    repeated that even after an actionable error message, but sent a number once the schema advertised a
+    plain optional number. **The cloud limit is therefore advertised as a plain number**, and validation is
+    unchanged.
+  - Wrong number types now get an error message that says how to fix the call.
+  - **Routing uses structured output through tool calling (`function_calling`).** Ollama answers 501 for
+    `json_schema` with qwen3.5:9b, and ministral-3:8b returned a self-contradictory decision with it.
+- **The retrieval agent is given `resolve_place`, `search_scenes` and `list_products`, but not `get_scene`.**
+  No task needs it and five forbid it, so offering it would only cost steps and prompt tokens.
+- **After `resolve_place` reports an unknown place, the agent is not forced to stop.** The clarify tasks then
+  measure whether the model asks or guesses.

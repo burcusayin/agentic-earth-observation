@@ -18,7 +18,7 @@ from typing import Annotated, Any, Protocol
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ContentBlock, ToolAnnotations
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, WithJsonSchema
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary, StacCatalog
@@ -26,6 +26,12 @@ from agentic_earth_observation.domain import MISSION_START, Product, SearchReque
 
 HOST = "127.0.0.1"
 PORT = 8001
+CLOUD_SCHEMA = {
+    "type": "number",
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Sentinel-2 only: maximum cloud cover in percent (0-100). Leave it out for no filter.",
+}
 ISO_DAY = r"^\d{4}-\d{2}-\d{2}$"  # dates as YYYY-MM-DD only, so a number is never read as a timestamp
 SCENE_ID = r"^[A-Za-z0-9_.-]+$"
 
@@ -73,13 +79,32 @@ class SceneResult(BaseModel):
 
 
 def explain(err: ValidationError) -> str:
-    """One readable line from a pydantic error: field and message, without pydantic internals or the input."""
+    """One readable line from a pydantic error: field and message, without pydantic internals.
+
+    Wrong number types get a message that says exactly how to fix the call, because models often send "20"
+    (text) for 20 and, told only "should be a valid number", repeat the same call.
+    """
     parts = []
     for error in err.errors():
-        message = str(error["msg"]).removeprefix("Value error, ")
+        message = _number_hint(error) or str(error["msg"]).removeprefix("Value error, ")
         where = ".".join(str(part) for part in error["loc"])
         parts.append(f"{where}: {message}" if where else message)
     return "; ".join(parts)
+
+
+def _number_hint(error: Any) -> str | None:  # noqa: ANN401 - a pydantic ErrorDetails dict
+    """An actionable message for a value of the wrong type where a number is expected, else None."""
+    if error["type"] not in ("float_type", "int_type"):
+        return None
+    kind = "a whole number" if error["type"] == "int_type" else "a number"
+    value = error.get("input")
+    if isinstance(value, bool):
+        return f"must be {kind}, not {str(value).lower()}"
+    if isinstance(value, str):
+        return f'must be {kind} such as {value.strip() or 10}, not the text "{value}"; send it without quotes'
+    if isinstance(value, float) and error["type"] == "int_type":
+        return f"must be {kind} such as {round(value)}, not {value}"
+    return f"must be {kind}"
 
 
 class CatalogMCP(FastMCP):
@@ -174,6 +199,9 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
         max_cloud_cover: Annotated[
             float | None,
             Field(strict=True, description="Sentinel-2 only: maximum cloud cover in percent (0-100)."),
+            # Advertised as a plain optional number: small models send "20" (text) for a "number or null"
+            # parameter but numbers for plain ones. Leaving it out still means no cloud filter.
+            WithJsonSchema(CLOUD_SCHEMA),
         ] = None,
         limit: Annotated[int, Field(strict=True, description="Maximum number of scenes, 1-50.")] = 10,
     ) -> SearchResult:
