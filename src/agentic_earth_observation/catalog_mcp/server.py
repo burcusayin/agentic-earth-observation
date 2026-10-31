@@ -22,6 +22,15 @@ from pydantic import BaseModel, Field, ValidationError, WithJsonSchema
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary, StacCatalog
+from agentic_earth_observation.catalog_mcp.tool_log import (
+    ErrorKind,
+    ToolCallLog,
+    ToolCallRecord,
+    current_trace_id,
+    error_kind,
+    returned_ids,
+)
+from agentic_earth_observation.config import Settings
 from agentic_earth_observation.domain import MISSION_START, Product, SearchRequest
 
 HOST = "127.0.0.1"
@@ -114,7 +123,21 @@ class CatalogMCP(FastMCP):
     cloud limit, and nobody would notice) and returns pydantic's raw text for arguments of the wrong type.
     """
 
+    tool_log: ToolCallLog | None = None  # every answered call is recorded here, for the evaluation
+
     async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        trace_id = current_trace_id()
+        try:
+            result = await self._checked_call(name, arguments)
+        except Exception as err:
+            self._record(trace_id, name, arguments, ok=False, kind=error_kind(err))
+            raise
+        self._record(trace_id, name, arguments, ok=True, ids=returned_ids(result))
+        return result
+
+    async def _checked_call(
         self, name: str, arguments: dict[str, Any]
     ) -> Sequence[ContentBlock] | dict[str, Any]:
         tool = next((t for t in await self.list_tools() if t.name == name), None)
@@ -132,6 +155,27 @@ class CatalogMCP(FastMCP):
                 raise ToolError(f"invalid arguments for {name}: {explain(err.__cause__)}") from err.__cause__
             raise
 
+    def _record(
+        self,
+        trace_id: str | None,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        ok: bool,
+        kind: ErrorKind | None = None,
+        ids: list[str] | None = None,
+    ) -> None:
+        if self.tool_log is not None:
+            record = ToolCallRecord(
+                trace_id=trace_id,
+                tool=name,
+                arguments=arguments,
+                ok=ok,
+                error_kind=kind,
+                returned_ids=ids or [],
+            )
+            self.tool_log.write(record)
+
 
 LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False)  # answers from local data only
 CATALOGUE = ToolAnnotations(readOnlyHint=True, openWorldHint=True)  # queries the external catalogue
@@ -142,11 +186,12 @@ INSTRUCTIONS = (
 )
 
 
-def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
-    """The MCP server with its four tools, using the given catalogue and gazetteer."""
+def build_server(catalog: Catalog, gazetteer: Gazetteer, tool_log: ToolCallLog | None = None) -> FastMCP:
+    """The MCP server with its four tools, using the given catalogue and gazetteer; calls go to `tool_log`."""
     mcp = CatalogMCP(
         "eo-catalog", instructions=INSTRUCTIONS, host=HOST, port=PORT, stateless_http=True, json_response=True
     )
+    mcp.tool_log = tool_log
 
     @mcp.tool(annotations=LOCAL)
     def list_products() -> ProductList:
@@ -252,7 +297,11 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer) -> FastMCP:
 
 def main() -> None:
     """Serve the tools over streamable HTTP on 127.0.0.1:8001, with Earth Search and the gazetteer."""
-    build_server(StacCatalog(), Gazetteer.load()).run(transport="streamable-http")
+    settings = Settings()
+    catalog = StacCatalog(
+        settings.stac_api_url, timeout_s=settings.stac_timeout_s, max_retries=settings.stac_max_retries
+    )
+    build_server(catalog, Gazetteer.load(), ToolCallLog(settings.tool_log)).run(transport="streamable-http")
 
 
 if __name__ == "__main__":
