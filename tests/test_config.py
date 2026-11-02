@@ -10,13 +10,20 @@ from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
+import ollama
 import pytest
 from langchain_ollama import ChatOllama
 from pydantic import ValidationError
 
 from agentic_earth_observation import config
 from agentic_earth_observation.config import ROOT, Settings
-from agentic_earth_observation.llm import OLLAMA_CONTEXT, SEED, build_chat_model
+from agentic_earth_observation.llm import (
+    OLLAMA_CONTEXT,
+    SEED,
+    build_chat_model,
+    model_server_busy,
+    unreadable_reply,
+)
 
 
 def settings(**overrides: Any) -> Settings:  # noqa: ANN401 - forwarded to Settings unchanged
@@ -214,3 +221,38 @@ def test_the_ollama_model_gets_the_agreed_options() -> None:
 def test_mistral_is_not_wired_up_yet() -> None:
     with pytest.raises(NotImplementedError, match="EO_LLM_PROVIDER=ollama"):
         build_chat_model(settings(llm_provider="mistral"))
+
+
+@pytest.mark.parametrize(
+    ("err", "busy", "unreadable"),
+    [
+        (ollama.ResponseError("server busy", 503), True, None),
+        (
+            ollama.ResponseError("XML syntax error on line 1: unexpected EOF", 500),
+            False,
+            "XML syntax error on line 1: unexpected EOF",
+        ),
+        (
+            ollama.ResponseError("tool 'get_scene' not found"),
+            False,
+            "tool 'get_scene' not found",
+        ),  # inside a stream: -1
+        (ollama.ResponseError('model "x" not found, try pulling it first', 404), False, None),
+        (ollama.ResponseError("does not support tools", 400), False, None),
+        (ConnectionError("Failed to connect to Ollama"), False, None),
+    ],
+)
+def test_the_model_servers_errors_are_read_by_status(
+    err: BaseException, busy: bool, unreadable: str | None
+) -> None:
+    # Ollama 0.40.1 reports a reply its parser cannot read as 500, or inside the stream; busy is 503.
+    assert model_server_busy(err) is busy
+    assert unreadable_reply(err) == unreadable
+
+
+def test_an_unreadable_replys_message_is_kept_on_one_short_line() -> None:
+    err = ollama.ResponseError("XML syntax error\n  on line 1: " + "x" * 400, 500)
+    detail = unreadable_reply(err)
+    assert detail is not None
+    assert detail.startswith("XML syntax error on line 1: x")
+    assert len(detail) == 300

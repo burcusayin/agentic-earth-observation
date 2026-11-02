@@ -62,6 +62,11 @@ class TestPreviousSearch:
     def test_the_place_name_is_stripped(self) -> None:
         assert previous(place="  Naples\n").place == "Naples"
 
+    def test_the_place_is_unknown_when_the_box_came_from_no_tool(self) -> None:
+        assert previous(place=None).place is None
+        unnamed = {k: v for k, v in NAPLES_WEEK.items() if k != "place"}
+        assert PreviousSearch.model_validate_json(json.dumps(unnamed)).place is None
+
     @pytest.mark.parametrize(
         ("changes", "message"),
         [
@@ -216,6 +221,22 @@ class TestRetrievalResult:
             status="ok", scenes=[SCENE], search=previous(MILAN_MARCH), failure="step_limit"
         )
         assert result.scenes == [SCENE]
+
+    def test_the_model_servers_words_come_only_with_a_failure(self) -> None:
+        detail = "XML syntax error on line 1: unexpected EOF"
+        kept = RetrievalResult(status="not_searched", failure="malformed_tool_call", failure_detail=detail)
+        assert kept.failure_detail == detail
+        with pytest.raises(ValidationError, match="failure_detail explains a failure"):
+            RetrievalResult(status="not_searched", failure_detail=detail)
+        with pytest.raises(ValidationError):
+            RetrievalResult(status="not_searched", failure="malformed_tool_call", failure_detail="x" * 301)
+
+    @pytest.mark.parametrize("suggestions", [[""], ["x" * 201], ["Milan"] * 11])
+    def test_suggestions_are_bounded(self, suggestions: list[str]) -> None:
+        # They come from tool output, which is untrusted, and reach the user's answer.
+        with pytest.raises(ValidationError):
+            RetrievalResult(status="unknown_place", suggestions=suggestions)
+        RetrievalResult(status="unknown_place", suggestions=["Milan"] * 10)
 
     def test_an_unknown_field_is_refused(self) -> None:
         with pytest.raises(ValidationError):

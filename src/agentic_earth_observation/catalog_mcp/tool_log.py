@@ -33,7 +33,7 @@ from agentic_earth_observation.catalog.stac import CatalogError
 logger = logging.getLogger(__name__)
 
 TRACE_HEADER = "X-EO-Trace"
-_TRACE_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")  # the header is untrusted input; matched in full
+TRACE_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")  # the header is untrusted input; matched in full
 
 ErrorKind = Literal["invalid_arguments", "unknown_tool", "catalogue", "cancelled", "other"]
 
@@ -131,7 +131,7 @@ def current_trace_id() -> str | None:
     value = request.headers.get(TRACE_HEADER)
     if value is None:
         return None
-    if isinstance(value, str) and _TRACE_ID.fullmatch(value):
+    if isinstance(value, str) and TRACE_ID.fullmatch(value):
         return value
     logger.warning(
         "refused an invalid %s header %r; the call is recorded without a trace id",

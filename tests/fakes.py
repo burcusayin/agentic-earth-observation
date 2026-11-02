@@ -1,12 +1,16 @@
-"""Shared test doubles: a fake catalogue (no network), a scripted chat model (no LLM) and sample data."""
+"""Shared test doubles: a fake catalogue (no network), a scripted chat model and a scripted Ollama server (no
+LLM), and sample data."""
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -14,6 +18,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
+from langchain_ollama import ChatOllama
 from pydantic import Field
 
 from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary
@@ -109,3 +114,73 @@ def tool_call(tool: str, call_id: str = "call-1", /, **args: object) -> AIMessag
     return AIMessage(
         content="", tool_calls=[{"name": tool, "args": args, "id": call_id, "type": "tool_call"}]
     )
+
+
+MID_STREAM = -1  # the status the Ollama client gives an error that arrives inside a stream
+
+
+@dataclass(frozen=True)
+class OllamaError:
+    """An error from Ollama: an HTTP status before any output, or MID_STREAM after some text."""
+
+    status: int
+    message: str
+
+
+CONNECTION_REFUSED = "connection refused"
+OllamaStep = dict[str, Any] | OllamaError | str  # a reply message, an error, or CONNECTION_REFUSED
+
+
+def ollama_tool_call(tool: str, /, **args: object) -> dict[str, Any]:
+    """A reply message that calls one tool, as Ollama streams it."""
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": tool, "arguments": args}}],
+    }
+
+
+def ollama_text(text: str) -> dict[str, Any]:
+    return {"role": "assistant", "content": text}
+
+
+class FakeOllama:
+    """An Ollama server that answers chat requests from a script, reached through httpx's MockTransport.
+
+    The real ChatOllama client talks to it, so tests see the replies and errors exactly as that client turns
+    them into messages and exceptions. Each reply reports 100 input and 10 output tokens.
+    """
+
+    def __init__(self, *steps: OllamaStep) -> None:
+        self.steps = list(steps)
+        self.requests: list[dict[str, Any]] = []
+
+    def model(self) -> ChatOllama:
+        return ChatOllama(model="qwen3.5:9b", async_client_kwargs={"transport": httpx.MockTransport(self)})
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/chat", request.url
+        self.requests.append(json.loads(request.content))
+        step = self.steps.pop(0)
+        if step == CONNECTION_REFUSED:
+            raise httpx.ConnectError("All connection attempts failed", request=request)
+        if isinstance(step, OllamaError) and step.status != MID_STREAM:
+            return httpx.Response(step.status, json={"error": step.message})
+        if isinstance(step, OllamaError):
+            lines = [_chunk(ollama_text("Let me"), done=False), {"error": step.message}]
+        else:
+            assert isinstance(step, dict)
+            lines = [_chunk(step, done=False), _chunk(ollama_text(""), done=True)]
+        return httpx.Response(200, content="".join(json.dumps(line) + "\n" for line in lines).encode())
+
+
+def _chunk(message: dict[str, Any], *, done: bool) -> dict[str, Any]:
+    chunk: dict[str, Any] = {
+        "model": "qwen3.5:9b",
+        "created_at": "2025-12-15T10:00:00Z",
+        "message": message,
+        "done": done,
+    }
+    if done:
+        chunk |= {"done_reason": "stop", "prompt_eval_count": 100, "eval_count": 10}
+    return chunk

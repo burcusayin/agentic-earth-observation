@@ -93,6 +93,17 @@ def test_a_follow_up_carries_the_cloud_limit_and_the_limit_when_they_were_set() 
     )
 
 
+def test_a_follow_up_leaves_out_a_place_that_no_tool_named() -> None:
+    unnamed = naples_week().model_copy(update={"place": None})
+    request = RetrievalRequest(
+        text="And the week after that?", today=date(2025, 12, 15), previous_search=unnamed
+    )
+    assert retrieval_user_message(request).endswith(
+        "PREVIOUS SEARCH: product=sentinel-1-grd, bbox=[14.1321, 40.7912, 14.3538, 40.9161], "
+        "start_date=2025-09-01, end_date=2025-09-07"
+    )
+
+
 def test_the_prompt_hash_covers_the_whole_module() -> None:
     # The request format (REQUEST:, PREVIOUS SEARCH:) reaches the model too, not only the system prompt.
     assert prompt_hash() == hashlib.sha256(Path(prompts.__file__).read_bytes()).hexdigest()

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import ollama
 import pytest
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
@@ -22,7 +23,16 @@ from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog_mcp.server import build_server
 from agentic_earth_observation.catalog_mcp.tool_log import ToolCallLog
 from agentic_earth_observation.retrieval_agent.agent import AGENT_TOOLS, RetrievalState, build_graph
-from tests.fakes import SCENE, FakeCatalog, ScriptedModel, tool_call
+from tests.fakes import (
+    MID_STREAM,
+    SCENE,
+    FakeCatalog,
+    FakeOllama,
+    OllamaError,
+    ScriptedModel,
+    ollama_tool_call,
+    tool_call,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -41,7 +51,7 @@ START: list[AnyMessage] = [
 
 def first_state() -> RetrievalState:
     """The state a turn starts from: the system prompt and the request, and no model call yet."""
-    return RetrievalState(messages=list(START), model_calls=0, failure=None)
+    return RetrievalState(messages=list(START), model_calls=0, failure=None, failure_detail=None)
 
 
 @pytest.fixture
@@ -214,3 +224,42 @@ async def test_an_error_outside_the_tools_reaches_the_caller() -> None:
     graph = build_graph(model, [resolve_place], max_model_calls=6)
     with pytest.raises(RuntimeError, match="session was closed"):
         await graph.ainvoke(first_state())
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OllamaError(500, "XML syntax error on line 1: unexpected EOF"),  # qwen3.5's parser, before any output
+        OllamaError(MID_STREAM, "tool 'get_scene' not found"),  # ministral-3's parser, after some text
+    ],
+)
+async def test_a_reply_the_model_server_cannot_read_is_a_malformed_call(
+    tmp_path: Path, error: OllamaError
+) -> None:
+    # Ollama parses the model's tool calls itself and reports one it cannot read as an error: the model's
+    # failure, with the server's words kept; what the tools returned before stays (decision of 2026-11-02).
+    log = tmp_path / "calls.jsonl"
+    server = FakeOllama(ollama_tool_call("resolve_place", name="Milan"), error)
+    async with agent_tools(FakeCatalog(), log) as tools:
+        state = await build_graph(server.model(), tools, max_model_calls=6).ainvoke(first_state())
+    assert (state["failure"], state["failure_detail"]) == ("malformed_tool_call", error.message)
+    assert state["model_calls"] == 2
+    assert [m.name for m in tool_messages(state)] == ["resolve_place"]
+    assert recorded_tools(log) == ["resolve_place"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OllamaError(503, "server busy, please try again.  maximum pending requests exceeded"),
+        OllamaError(404, 'model "qwen3.5:9b" not found, try pulling it first'),
+        OllamaError(400, "does not support tools"),
+    ],
+)
+async def test_other_model_server_errors_reach_the_caller(tmp_path: Path, error: OllamaError) -> None:
+    # Not the model's reply: the runner decides whether it is infrastructure or a configuration error.
+    async with agent_tools(FakeCatalog(), tmp_path / "calls.jsonl") as tools:
+        graph = build_graph(FakeOllama(error).model(), tools, max_model_calls=6)
+        with pytest.raises(ollama.ResponseError) as raised:
+            await graph.ainvoke(first_state())
+    assert raised.value.status_code == error.status

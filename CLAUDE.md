@@ -15,12 +15,13 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
   - Add a dated entry when a decision is made or reversed.
 - `src/agentic_earth_observation/`:
   - `domain.py`: validated types for every search (product, bbox, dates, cloud cover, limit).
-  - `config.py`: settings from `EO_*` variables, timeouts included; `llm.py`: the chat-model factory.
+  - `config.py`: settings from `EO_*` variables, timeouts included; `llm.py`: the chat-model factory, and
+    how to read the model server's errors.
   - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
   - `catalog_mcp/`: `server.py`, the MCP server with four tools (no LLM), and `tool_log.py`, the record of
     every tool call.
-  - `retrieval_agent/`: `models.py` (request and result) and `prompts.py`; the LangGraph agent and its A2A
-    server are not yet implemented.
+  - `retrieval_agent/`: `models.py` (request and result), `prompts.py`, and `agent.py` (the LangGraph loop and
+    `run_retrieval`, one turn over MCP); its A2A server is not yet implemented.
   - `orchestrator/`: the LangGraph orchestrator; an A2A client (not yet implemented).
   - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded

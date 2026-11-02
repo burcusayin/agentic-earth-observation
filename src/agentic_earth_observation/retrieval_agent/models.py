@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -11,9 +11,11 @@ from agentic_earth_observation.catalog.stac import SceneSummary
 from agentic_earth_observation.domain import Product, SearchRequest
 
 RetrievalStatus = Literal["ok", "empty", "unknown_place", "error", "not_searched"]
-# The model failures of docs/evaluation.md, which fail the task. Everything else that goes wrong, a turn that
-# runs past its deadline included, is infrastructure (decision of 2026-11-02).
+# The model failures of docs/evaluation.md, which fail the task. A failure outside the model's control (a
+# timeout, a server that cannot be reached or is busy) is infrastructure; any other error is a bug and is
+# raised (decisions of 2026-11-02).
 ModelFailure = Literal["step_limit", "malformed_tool_call", "parse_error"]
+PlaceName = Annotated[str, Field(min_length=1, max_length=200)]
 
 # Both sides of A2A validate these from JSON. strict: a number must be a number and a date a "YYYY-MM-DD"
 # string, never a timestamp. Text is stripped before its length is checked.
@@ -24,7 +26,8 @@ class PreviousSearch(BaseModel):
     """The search a follow-up question continues: the arguments of the last successful search."""
 
     model_config = A2A_CONFIG
-    place: str = Field(min_length=1, max_length=200)  # the gazetteer name of the place searched
+    # The gazetteer name of the place whose box was searched; None when the box came from no tool.
+    place: str | None = Field(default=None, min_length=1, max_length=200)
     product: Product
     bbox: list[float] = Field(min_length=4, max_length=4)
     start_date: date
@@ -60,7 +63,7 @@ class RetrievalRequest(BaseModel):
 
 
 class Usage(BaseModel):
-    """Tokens and time spent by the model in one turn."""
+    """The model's calls and tokens in one turn, and the turn's time, tool calls included."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -78,8 +81,10 @@ class RetrievalResult(BaseModel):
     status: RetrievalStatus
     scenes: list[SceneSummary] = []  # exactly the scenes of the last successful search
     search: PreviousSearch | None = None  # the arguments of that search, for a follow-up
-    suggestions: list[str] = []  # known place names close to an unknown one
+    # Known place names close to an unknown one; the gazetteer offers at most 3.
+    suggestions: list[PlaceName] = Field(default=[], max_length=10)
     failure: ModelFailure | None = None  # the model's failure: fails the task
+    failure_detail: str | None = Field(default=None, max_length=300)  # the model server's words, if any
     infra_error: str | None = None  # a failure outside the model's control: retried and excluded
     usage: Usage = Usage()
 
@@ -93,4 +98,6 @@ class RetrievalResult(BaseModel):
             raise ValueError("suggestions come with unknown_place only")
         if self.failure is not None and self.infra_error is not None:
             raise ValueError("a failure is either the model's or the infrastructure's, not both")
+        if self.failure_detail is not None and self.failure is None:
+            raise ValueError("failure_detail explains a failure: set failure too")
         return self

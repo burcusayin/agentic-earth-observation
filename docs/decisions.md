@@ -158,3 +158,41 @@ decision is made or reversed; do not rewrite old entries.
       itself), excluded from the scores, and counted in the report next to each model's latency.
   - **Grounding holds by construction:** answers are built from templates and cite only ids the tools returned,
     so the write-up reports grounding as a property of the design, not of the model.
+- **How one retrieval turn becomes a result** (`run_retrieval` and `result_from_turn` in `agent.py`).
+  - **The status comes from the tools' results only,** never from the model's text.
+    - The last successful search gives `ok` or `empty`, with its scenes and its arguments as sent.
+    - Otherwise, a place that `resolve_place` did not know gives `unknown_place`, with the latest such call's
+      suggestions, even if a later call found a place and nothing was searched.
+    - Otherwise, any failed tool call gives `error`; otherwise `not_searched`.
+    - A model failure is kept beside whatever the tools returned.
+  - **What counts as infrastructure** refines the list in "How the runner classifies each turn" above:
+    - the turn's deadline, when it is what ended the turn;
+    - a timeout, a connection that cannot be made or is cut, the MCP client giving up waiting (each MCP
+      request is bounded by `EO_MCP_TIMEOUT_S`, so an answer the client cannot read fails in time too), and a
+      model server that says it is busy (Ollama's 503).
+  - **Everything else is raised,** because infrastructure is excluded from the scores and a bug counted as
+    infrastructure would shrink them unseen:
+    - an HTTP error from our own MCP server, which is a bug in it;
+    - a wrong MCP URL, which the MCP client reports as "Session terminated";
+    - a model the model server does not have (404), and any other error.
+  - **Catalogue errors reach the model as tool errors,** so the turn's status is `error`. The evaluation runner
+    counts them as infrastructure from the log's `error_kind`, because the model and the agent see only a fixed
+    message.
+  - **Usage is counted per model call as it happens,** so a turn that fails part-way still reports the calls and
+    tokens it spent. `seconds` is the whole turn, tool calls included.
+  - **A search names the place whose box it used:** one that `resolve_place` found in the turn, or the previous
+    search's place when a follow-up reuses its box. A box agreeing to 0.001° counts, so one copied to 3
+    decimals does. When no tool returned the box (the model typed it), the place is left empty and the PREVIOUS
+    SEARCH line leaves it out.
+- **A reply that Ollama cannot read is the model's failure.**
+  - Both local models use Ollama's own parser for tool calls. When it cannot read one (malformed XML for
+    qwen3.5:9b; malformed JSON, or a tool it was not given, for ministral-3:8b), Ollama 0.40.1 answers HTTP 500,
+    or puts the error inside the stream once output has begun. Checked in Ollama's source for that version.
+  - A crash of the model server looks the same. These errors count as `malformed_tool_call` and fail the task,
+    with Ollama's message kept in `failure_detail` for the error analysis.
+  - The other choice, infrastructure, would retry and exclude the model's own failures and so raise its score
+    unseen; a crash counted against the model is at least visible in that message.
+- **ChatOllama's repair of list arguments belongs to the serving stack.** When a model writes a list or an object
+  as text (`"[9.04, ...]"`), langchain-ollama parses it before the call reaches our server, which then never
+  sees the text that it would refuse (decision above). langchain-mistralai does not do this. The repair is part
+  of the local-against-API difference the evaluation measures, and the write-up states it.

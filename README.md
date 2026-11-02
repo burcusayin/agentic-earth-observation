@@ -18,7 +18,7 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | Gazetteer: place names to boxes, from OpenStreetMap | `src/agentic_earth_observation/catalog/gazetteer.py` | Done |
 | MCP server with four tools | `src/agentic_earth_observation/catalog_mcp/server.py` | Done |
 | Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
-| Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Planned |
+| Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | In progress: the agent runs; A2A to come |
 | Orchestrator (LangGraph), an A2A client | `src/agentic_earth_observation/orchestrator/` | Planned |
 | Evaluation runner and results | `src/agentic_earth_observation/evals/run_eval.py` | Planned |
 

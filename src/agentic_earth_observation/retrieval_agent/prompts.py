@@ -63,8 +63,9 @@ def retrieval_user_message(request: RetrievalRequest) -> str:
 
 
 def _describe(search: PreviousSearch) -> str:
-    parts = [
-        f"place={search.place}",  # so the model can tell whether a follow-up keeps the place
+    # The place, when known, lets the model tell whether a follow-up keeps it.
+    parts = [] if search.place is None else [f"place={search.place}"]
+    parts += [
         f"product={search.product.value}",
         f"bbox={search.bbox}",
         f"start_date={search.start_date.isoformat()}",
