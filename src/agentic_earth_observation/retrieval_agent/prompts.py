@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date
+from pathlib import Path
 
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest
 
@@ -74,5 +75,9 @@ def _describe(search: PreviousSearch) -> str:
 
 
 def prompt_hash() -> str:
-    """SHA-256 of the prompt template, recorded with every evaluation run."""
-    return hashlib.sha256(RETRIEVAL_SYSTEM_PROMPT.encode()).hexdigest()
+    """SHA-256 of this module, recorded with every evaluation run.
+
+    The whole file is hashed, not only the system prompt: the format of each request (REQUEST, PREVIOUS
+    SEARCH) reaches the model too.
+    """
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()

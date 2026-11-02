@@ -11,16 +11,17 @@ Run it with `make serve-mcp`; it listens on http://127.0.0.1:8001/mcp only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, NamedTuple, Protocol
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import ContentBlock, ToolAnnotations
+from mcp.types import ContentBlock, Tool, ToolAnnotations
 from pydantic import BaseModel, Field, ValidationError, WithJsonSchema
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
@@ -261,6 +262,20 @@ INSTRUCTIONS = (
     "Tools to find Sentinel-1 and Sentinel-2 satellite scenes (metadata only, no imagery). "
     "Resolve place names with resolve_place before searching; never invent coordinates or scene ids."
 )
+
+
+def tool_descriptions_hash(tools: Iterable[Tool]) -> str:
+    """SHA-256 of what a model reads about the given tools, recorded with every evaluation run.
+
+    It covers each tool's name, description and input schema (parameter descriptions included), in name order,
+    so a changed docstring or parameter description changes the hash.
+    """
+    described = [
+        {"name": t.name, "description": t.description, "input_schema": t.inputSchema}
+        for t in sorted(tools, key=lambda t: t.name)
+    ]
+    text = json.dumps(described, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 async def _ask_catalogue[T](what: str, ask: Callable[[], T], deadline_s: float | None) -> T:

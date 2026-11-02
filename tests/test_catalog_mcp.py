@@ -5,6 +5,7 @@ The server is built with a fake catalogue (no network) and the committed gazette
 
 from __future__ import annotations
 
+import copy
 from datetime import date
 from typing import Any
 
@@ -14,7 +15,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import CallToolResult, TextContent
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
-from agentic_earth_observation.catalog_mcp.server import build_server
+from agentic_earth_observation.catalog_mcp.server import build_server, tool_descriptions_hash
 from agentic_earth_observation.domain import Product
 from tests.fakes import ROME_JULY, SCENE, BlockingCatalog, FakeCatalog
 
@@ -307,3 +308,18 @@ async def test_the_cloud_limit_is_advertised_as_a_plain_optional_number() -> Non
     assert schema["properties"]["max_cloud_cover"]["type"] == "number"
     assert "anyOf" not in schema["properties"]["max_cloud_cover"]
     assert "max_cloud_cover" not in schema.get("required", [])
+
+
+async def test_the_tool_descriptions_hash_follows_what_a_model_reads() -> None:
+    async with create_connected_server_and_client_session(server()) as session:
+        tools = (await session.list_tools()).tools
+    digest = tool_descriptions_hash(tools)
+    assert digest == tool_descriptions_hash(reversed(tools))  # the order of the list does not matter
+    search = next(t for t in tools if t.name == "search_scenes")
+    others = [t for t in tools if t is not search]
+    reworded = search.model_copy(update={"description": f"{search.description} Newest first."})
+    schema = copy.deepcopy(search.inputSchema)
+    schema["properties"]["limit"]["description"] = "How many scenes."
+    reparametrised = search.model_copy(update={"inputSchema": schema})
+    for changed in ([*others, reworded], [*others, reparametrised], others):
+        assert tool_descriptions_hash(changed) != digest

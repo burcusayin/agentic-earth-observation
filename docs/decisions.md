@@ -112,3 +112,8 @@ decision is made or reversed; do not rewrite old entries.
   - A relative tool-log path starts at the repository root, and the log cannot be turned off from the
     environment.
   - At least 4 model calls per turn: place, search, one retry and the reply.
+- **What the run records hash.**
+  - `prompts.py` is hashed as a whole, so the request format (`REQUEST:`, `PREVIOUS SEARCH:`) counts as well as
+    the system prompt.
+  - The tool descriptions are hashed from the tools as the agent receives them: name, description and input
+    schema, including each parameter's description.

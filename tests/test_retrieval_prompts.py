@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
+from pathlib import Path
 
 from agentic_earth_observation.domain import Product
+from agentic_earth_observation.retrieval_agent import prompts
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest
 from agentic_earth_observation.retrieval_agent.prompts import (
     prompt_hash,
@@ -60,6 +63,6 @@ def test_a_follow_up_carries_the_previous_search_exactly() -> None:
     assert "max_cloud_cover" not in message  # radar: no cloud limit to carry over
 
 
-def test_the_prompt_hash_is_stable() -> None:
-    assert prompt_hash() == prompt_hash()
-    assert len(prompt_hash()) == 64
+def test_the_prompt_hash_covers_the_whole_module() -> None:
+    # The request format (REQUEST:, PREVIOUS SEARCH:) reaches the model too, not only the system prompt.
+    assert prompt_hash() == hashlib.sha256(Path(prompts.__file__).read_bytes()).hexdigest()
