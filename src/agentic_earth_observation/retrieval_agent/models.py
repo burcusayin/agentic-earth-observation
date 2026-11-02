@@ -11,7 +11,9 @@ from agentic_earth_observation.catalog.stac import SceneSummary
 from agentic_earth_observation.domain import Product, SearchRequest
 
 RetrievalStatus = Literal["ok", "empty", "unknown_place", "error", "not_searched"]
-ModelFailure = Literal["step_limit", "malformed_tool_call", "parse_error", "turn_timeout"]
+# The model failures of docs/evaluation.md, which fail the task. Everything else that goes wrong, a turn that
+# runs past its deadline included, is infrastructure (decision of 2026-11-02).
+ModelFailure = Literal["step_limit", "malformed_tool_call", "parse_error"]
 
 # Both sides of A2A validate these from JSON. strict: a number must be a number and a date a "YYYY-MM-DD"
 # string, never a timestamp. Text is stripped before its length is checked.

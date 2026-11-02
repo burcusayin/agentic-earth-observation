@@ -136,3 +136,25 @@ decision is made or reversed; do not rewrite old entries.
     the API models still to come, is scored on a rule it was not told.
   - Step 3 is unchanged: it carries the ministral-3:8b fix above.
   - After the change, all seven probe cases still gave the expected calls on both local models.
+- **How the runner classifies each turn**, within the frozen rules of `docs/evaluation.md`.
+  - **Status mapping**, from agent status to scored status:
+
+    | Agent status | Scored status |
+    |---|---|
+    | `ok` | `ok` |
+    | `empty` | `empty` |
+    | `error` | `error` |
+    | `unknown_place` | `clarified` |
+    | `not_searched` | `declined` |
+  - **Model failures fail the task**, whatever the trace scores. There are three: running out of steps, a
+    malformed tool call (unparseable, or naming a tool that does not exist), and unparseable output. A refused
+    argument is not a failure on its own: the model may correct it, and the last search is the one scored.
+  - **Infrastructure:**
+    - what counts: a catalogue error or a missed catalogue deadline in the turn; a server (MCP, A2A, Ollama or
+      the Mistral API) not answering within its timeout; and a turn that runs past its deadline. The frozen
+      rules list the model failures, and a timeout is not one of them, while the step limit already catches a
+      model that loops.
+    - what happens: the task is retried with a fresh trace id, at most twice (at temperature 0 a run repeats
+      itself), excluded from the scores, and counted in the report next to each model's latency.
+  - **Grounding holds by construction:** answers are built from templates and cite only ids the tools returned,
+    so the write-up reports grounding as a property of the design, not of the model.
