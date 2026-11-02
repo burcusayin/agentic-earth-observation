@@ -187,6 +187,52 @@ class TestArgumentProtection:
         assert "invalid arguments for search_scenes" in error_text(result)
         assert "errors.pydantic.dev" not in error_text(result)
 
+    @pytest.mark.parametrize(
+        ("change", "expected"),
+        [
+            (
+                {"bbox": "[12.2344, 41.6556, 12.8558, 42.141]"},
+                'bbox: must be a list such as [12.2344, 41.6556, 12.8558, 42.141], not the text "[12.2344, '
+                '41.6556, 12.8558, 42.141]"; send it without quotes',
+            ),
+            ({"bbox": "null"}, 'bbox: must be a list, not the text "null"'),  # required: cannot be left out
+            ({"max_cloud_cover": "null"}, 'max_cloud_cover: leave it out instead of sending the text "null"'),
+            ({"max_cloud_cover": "20%"}, 'max_cloud_cover: must be a number, not the text "20%"'),
+            ({"max_cloud_cover": ""}, 'max_cloud_cover: must be a number, not the text ""'),
+            ({"max_cloud_cover": "true"}, 'max_cloud_cover: must be a number, not the text "true"'),
+            ({"max_cloud_cover": "NaN"}, 'max_cloud_cover: must be a number, not the text "NaN"'),
+            ({"limit": "2.5"}, 'limit: must be a whole number, not the text "2.5"'),
+            ({"limit": "[3]"}, 'limit: must be a whole number, not the text "[3]"'),
+            (
+                {"bbox": ["12.2344", 41.6556, 12.8558, 42.141]},
+                'bbox.0: must be a number such as 12.2344, not the text "12.2344"; send it without quotes',
+            ),
+        ],
+    )
+    async def test_text_is_never_turned_into_a_list_or_a_number(
+        self, change: dict[str, Any], expected: str
+    ) -> None:
+        # FastMCP would parse "[...]" into a list and "null" into None; the record would keep the text.
+        catalog = FakeCatalog()
+        result = await call(server(catalog), "search_scenes", {**ROME_JULY, **change})
+        assert result.isError
+        assert expected in error_text(result)
+        assert catalog.requests == []
+
+    async def test_every_argument_sent_as_text_is_named_at_once(self) -> None:
+        change = {"bbox": "[12.2344, 41.6556, 12.8558, 42.141]", "limit": "3"}
+        message = error_text(await call(server(), "search_scenes", {**ROME_JULY, **change}))
+        assert "bbox: must be a list" in message
+        assert 'limit: must be a whole number such as 3, not the text "3"' in message
+
+    async def test_an_unknown_tool_is_named_with_the_tools_that_exist(self) -> None:
+        result = await call(server(), "get_weather", {"place": "Napoli"})
+        assert result.isError
+        assert (
+            "unknown tool get_weather; the tools are: get_scene, list_products, resolve_place, search_scenes"
+            in error_text(result)
+        )
+
     async def test_integers_are_fine_where_numbers_are_expected(self) -> None:
         result = data(
             await call(server(), "search_scenes", {**ROME_JULY, "bbox": [12, 41, 13, 42], "limit": 5})

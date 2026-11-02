@@ -92,3 +92,11 @@ decision is made or reversed; do not rewrite old entries.
   read "when the search returns" as the place lookup's reply. "Once you have the bbox, call search_scenes" and
   "when search_scenes returns" fixed both. qwen3.5:9b's calls did not change. Checked on the dev questions, the
   dev follow-up and a made-up place only.
+- **Text is never accepted for a list or a number, even when it would parse.** FastMCP parses such text as JSON
+  before validating it, so a box sent as `"[...]"` was searched while the record kept the text, and the scoring
+  would have failed a search that ran correctly. The server now refuses it with a message that says how to send
+  the value, as already decided for numbers on 2026-10-30.
+- **The tool-call record is ordered and complete.** It keeps the client's request id, because calls sent
+  together can finish in any order. It also records cancelled calls and names unknown tools. The server checks
+  at start-up that the log can be written; a later write failure reaches the model only as a fixed message,
+  never with a local path, and never hides the tool's own error.
