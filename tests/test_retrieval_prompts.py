@@ -58,9 +58,27 @@ def test_a_follow_up_carries_the_previous_search_exactly() -> None:
     request = RetrievalRequest(
         text="And the week after that?", today=date(2025, 12, 15), previous_search=NAPLES_WEEK
     )
-    message = retrieval_user_message(request)
-    assert "PREVIOUS SEARCH: product=sentinel-1-grd, bbox=[14.1321, 40.7912, 14.3538, 40.9161]" in message
-    assert "max_cloud_cover" not in message  # radar: no cloud limit to carry over
+    assert retrieval_user_message(request) == (
+        "REQUEST: And the week after that?\n"
+        "PREVIOUS SEARCH: product=sentinel-1-grd, bbox=[14.1321, 40.7912, 14.3538, 40.9161], "
+        "start_date=2025-09-01, end_date=2025-09-07"
+    )  # radar: no cloud limit to carry over
+
+
+def test_a_follow_up_carries_the_cloud_limit_and_the_limit_when_they_were_set() -> None:
+    milan_march = PreviousSearch(
+        product=Product.SENTINEL_2_L2A,
+        bbox=[9.0409, 45.3867, 9.2781, 45.5358],
+        start_date=date(2025, 3, 1),
+        end_date=date(2025, 3, 31),
+        max_cloud_cover=20.0,
+        limit=3,
+    )
+    request = RetrievalRequest(text="And in April?", today=date(2025, 12, 15), previous_search=milan_march)
+    assert retrieval_user_message(request).endswith(
+        "PREVIOUS SEARCH: product=sentinel-2-l2a, bbox=[9.0409, 45.3867, 9.2781, 45.5358], "
+        "start_date=2025-03-01, end_date=2025-03-31, max_cloud_cover=20, limit=3"
+    )
 
 
 def test_the_prompt_hash_covers_the_whole_module() -> None:

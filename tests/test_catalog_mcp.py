@@ -55,6 +55,13 @@ async def test_offers_exactly_four_documented_read_only_tools() -> None:
         assert tool.description
         assert tool.annotations is not None
         assert tool.annotations.readOnlyHint
+    open_world = {t.name: t.annotations.openWorldHint for t in tools if t.annotations is not None}
+    assert open_world == {  # which tools reach the external catalogue
+        "list_products": False,
+        "resolve_place": False,
+        "search_scenes": True,
+        "get_scene": True,
+    }
 
 
 async def test_listens_on_localhost_only() -> None:
@@ -66,6 +73,7 @@ async def test_list_products_describes_both_products() -> None:
     assert products["sentinel-2-l2a"]["cloud_filter"] is True
     assert products["sentinel-1-grd"]["cloud_filter"] is False
     assert products["sentinel-2-l2a"]["first_date"] == "2015-06-23"
+    assert products["sentinel-1-grd"]["first_date"] == "2014-04-03"
 
 
 class TestResolvePlace:
@@ -96,6 +104,14 @@ class TestSearchScenes:
         assert request.max_cloud_cover == 10
         assert request.limit == 10
 
+    async def test_the_limit_reaches_the_catalogue_and_no_note_comes_with_scenes(self) -> None:
+        scenes = [SCENE.model_copy(update={"id": f"{SCENE.id}_{i}"}) for i in range(12)]
+        catalog = FakeCatalog(scenes)
+        result = data(await call(server(catalog), "search_scenes", {**ROME_JULY, "limit": 3}))
+        assert result["count"] == 3
+        assert result["note"] is None
+        assert catalog.requests[0].limit == 3
+
     async def test_no_results_is_said_plainly(self) -> None:
         result = data(await call(server(FakeCatalog([])), "search_scenes", ROME_JULY))
         assert result["count"] == 0
@@ -116,9 +132,13 @@ class TestSearchScenes:
         assert result.isError
         assert "Sentinel-1" in error_text(result)
 
-    async def test_a_bbox_without_four_numbers_is_refused(self) -> None:
-        result = await call(server(), "search_scenes", {**ROME_JULY, "bbox": [12.2, 41.6, 12.8]})
+    @pytest.mark.parametrize("bbox", [[12.2, 41.6, 12.8], [12.2, 41.6, 12.8, 42.1, 0.0]])
+    async def test_a_bbox_without_four_numbers_is_refused(self, bbox: list[float]) -> None:
+        catalog = FakeCatalog()
+        result = await call(server(catalog), "search_scenes", {**ROME_JULY, "bbox": bbox})
         assert result.isError
+        assert "bbox" in error_text(result)
+        assert catalog.requests == []
 
     async def test_a_catalogue_failure_is_reported_without_a_traceback(self) -> None:
         result = await call(server(FakeCatalog(fail=True)), "search_scenes", ROME_JULY)
@@ -291,6 +311,7 @@ async def test_dns_rebinding_protection_is_on_for_localhost_only() -> None:
         ({"max_cloud_cover": True}, "max_cloud_cover: must be a number, not true"),
         ({"limit": "5"}, 'limit: must be a whole number such as 5, not the text "5"'),
         ({"limit": 2.5}, "limit: must be a whole number such as 2, not 2.5"),
+        ({"limit": 2.7}, "limit: must be a whole number such as 3, not 2.7"),
     ],
 )
 async def test_wrong_number_types_get_a_message_that_says_how_to_fix_them(
@@ -301,11 +322,23 @@ async def test_wrong_number_types_get_a_message_that_says_how_to_fix_them(
     assert expected in error_text(result)
 
 
+async def test_every_wrong_argument_is_named_in_one_message() -> None:
+    message = error_text(
+        await call(server(), "search_scenes", {**ROME_JULY, "limit": 2.5, "max_cloud_cover": True})
+    )
+    assert "limit: must be a whole number" in message
+    assert "max_cloud_cover: must be a number, not true" in message
+
+
 async def test_the_cloud_limit_is_advertised_as_a_plain_optional_number() -> None:
     async with create_connected_server_and_client_session(server()) as session:
         tools = {t.name: t for t in (await session.list_tools()).tools}
     schema = tools["search_scenes"].inputSchema
     assert schema["properties"]["max_cloud_cover"]["type"] == "number"
+    assert (
+        schema["properties"]["max_cloud_cover"]["minimum"],
+        schema["properties"]["max_cloud_cover"]["maximum"],
+    ) == (0, 100)
     assert "anyOf" not in schema["properties"]["max_cloud_cover"]
     assert "max_cloud_cover" not in schema.get("required", [])
 

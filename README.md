@@ -30,7 +30,7 @@ user question
 orchestrator (LangGraph)            decides: delegate / decline / clarify
      |  A2A task
 retrieval agent (LangGraph, A2A server)
-     |  MCP tool calls: list_products, resolve_place, search_scenes, get_scene
+     |  MCP tool calls: list_products, resolve_place, search_scenes
 catalogue MCP server  -->  Earth Search STAC API (Sentinel-1 and Sentinel-2 scene metadata)
 ```
 
@@ -44,8 +44,8 @@ The golden set has 22 tasks: 4 for development and 18 for testing.
   requests including a prompt injection, unknown or misspelt places, radar with a cloud limit, dates before a
   satellite launched, and a search with no results.
 - **Frozen first:** the test split, the labelling rules, the scoring code and the gazetteer were frozen (git tag
-  `golden-test-v1`) before any agent prompt was written. A test checks that system code never mentions
-  test-split places or questions.
+  `golden-test-v1`) before any agent prompt was written. A test checks that the system code and scripts never
+  mention test-split places, questions or dates.
 - **Scoring:** each turn is scored on:
   - the route;
   - tool order;
@@ -74,7 +74,8 @@ uv run python -m agentic_earth_observation.evals.golden   # validate the golden 
 Any MCP client can use the running server. For example, to add it to Claude Code:
 `claude mcp add --transport http eo-catalog http://127.0.0.1:8001/mcp`.
 
-`.env.example` lists the settings the agents will read (model provider, model, keys); they are not used yet.
+`.env.example` lists every setting with its default. The MCP server already reads the catalogue, timeout and
+tool-log settings; the agents will read the rest (model provider, model, keys).
 
 ## How this repository is developed
 

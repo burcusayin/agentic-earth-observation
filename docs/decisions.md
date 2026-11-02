@@ -117,3 +117,12 @@ decision is made or reversed; do not rewrite old entries.
     the system prompt.
   - The tool descriptions are hashed from the tools as the agent receives them: name, description and input
     schema, including each parameter's description.
+- **Model failures and infrastructure, clarified.** The 2026-10-09 entry says that "other failures are
+  infrastructure errors". That means failures outside the model's control: the catalogue, the network or a
+  server. The model's own failures fail the task, as decided on 2026-10-30: running out of steps, malformed tool
+  calls and unparseable output. How a turn timeout counts will be decided with the agent.
+- **The review read the test split.** One reviewer read the test split to check the prompt against the
+  labelling rules. One finding came only from test questions and was deliberately not acted on; tuning stays on
+  the dev split.
+- **The leakage test is stricter.** It also checks the capitalised words inside test questions (so places with
+  no gazetteer entry are covered) and the test-split dates, and it scans `scripts/` as well as `src/`.
