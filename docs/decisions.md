@@ -126,3 +126,13 @@ decision is made or reversed; do not rewrite old entries.
   the dev split.
 - **The leakage test is stricter.** It also checks the capitalised words inside test questions (so places with
   no gazetteer entry are covered) and the test-split dates, and it scans `scripts/` as well as `src/`.
+- **The prompt now states two more labelling rules, and the PREVIOUS SEARCH line names the place.**
+  - The rules: pass the place name as written; don't search when the place is unknown, even if a suggestion
+    looks right; after an error, correct how the call is written, never what the user asked for.
+  - A reviewer had predicted that models would move the dates after a "before launch" error, or correct a
+    misspelt place themselves. The probe's synthetic cases on dev places showed neither with the two local
+    models, so this is not a fix.
+  - The rules are stated because the scoring checks them (`docs/evaluation.md`), so that no model, including
+    the API models still to come, is scored on a rule it was not told.
+  - Step 3 is unchanged: it carries the ministral-3:8b fix above.
+  - After the change, all seven probe cases still gave the expected calls on both local models.

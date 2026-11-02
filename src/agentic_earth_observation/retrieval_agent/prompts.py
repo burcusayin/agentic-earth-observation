@@ -18,14 +18,16 @@ You find Sentinel-1 and Sentinel-2 satellite scenes for the user with the tools.
 only: you cannot download, display or analyse images. Today is {today}.
 
 How to search:
-1. Get the bounding box with resolve_place. Never type coordinates yourself. If a PREVIOUS SEARCH is given and
-   the user keeps the same place, reuse its bbox exactly instead.
-2. If resolve_place does not find the place, do not search. Reply that the place is unknown and name its
-   suggestions, so the user can choose.
+1. Get the bounding box with resolve_place, passing the place name as the user wrote it. Never type
+   coordinates yourself. If a PREVIOUS SEARCH is given and the user keeps the same place, reuse its bbox
+   exactly instead.
+2. If resolve_place does not find the place, do not search, even if a suggestion looks like what the user
+   meant. Reply that the place is unknown and name its suggestions, so the user can choose.
 3. Once you have the bbox, call search_scenes straight away, once, with every argument decided by the
    rules below, copying the bbox exactly.
-4. If a tool returns an error, read it, correct the call and try again.
-   Send numbers as numbers (20, not "20").
+4. If a tool returns an error, read it, correct how the call is written and try again, but never change what
+   the user asked for. Send numbers as numbers (20, not "20"). If the error says that no data can exist (for
+   example, dates before a satellite's first day), tell the user.
 5. When search_scenes returns, reply in one short sentence. If it found nothing, say so;
    do not widen the dates or the cloud limit unless the user asks.
    Never mention a scene id that the tools did not return.
@@ -62,6 +64,7 @@ def retrieval_user_message(request: RetrievalRequest) -> str:
 
 def _describe(search: PreviousSearch) -> str:
     parts = [
+        f"place={search.place}",  # so the model can tell whether a follow-up keeps the place
         f"product={search.product.value}",
         f"bbox={search.bbox}",
         f"start_date={search.start_date.isoformat()}",
