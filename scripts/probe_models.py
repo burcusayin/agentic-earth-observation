@@ -5,7 +5,8 @@
 
 The MCP server runs in-process with the real tool schemas and an offline catalogue that finds nothing, so no
 request leaves the machine. The model gets the retrieval agent's real instructions, dated with the
-evaluation's reference date. Only dev-split questions are used. Models are probed one at a time and unloaded
+evaluation's reference date. Only dev-split questions and synthetic ones about dev places are used, never the
+test split; each case says what the labelling rules expect. Models are probed one at a time and unloaded
 afterwards, so two never share the GPU.
 """
 
@@ -15,6 +16,8 @@ import asyncio
 import json
 import sys
 import time
+from dataclasses import dataclass
+from datetime import date
 from typing import Any, Literal
 
 import httpx
@@ -32,20 +35,74 @@ from agentic_earth_observation.config import Settings
 from agentic_earth_observation.domain import Product, SearchRequest
 from agentic_earth_observation.evals.golden import REFERENCE_DATE
 from agentic_earth_observation.llm import build_chat_model
-from agentic_earth_observation.retrieval_agent.models import RetrievalRequest
+from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest
 from agentic_earth_observation.retrieval_agent.prompts import retrieval_system_prompt, retrieval_user_message
 
 MODELS = ["qwen3.5:9b", "ministral-3:8b"]
-QUESTIONS = [
-    "Show me Sentinel-2 scenes of Milan from March 2025 with little cloud.",
-    "Find radar scenes over Naples for the first week of September 2025.",
+
+
+@dataclass(frozen=True)
+class Case:
+    """One probe question and what the labelling rules in docs/evaluation.md expect from it."""
+
+    label: str
+    text: str
+    expect: str
+    previous: PreviousSearch | None = None
+
+
+NAPLES_FIRST_WEEK = PreviousSearch(
+    place="Naples",
+    product=Product.SENTINEL_1_GRD,
+    bbox=[14.1321, 40.7912, 14.3538, 40.9161],
+    start_date=date(2025, 9, 1),
+    end_date=date(2025, 9, 7),
+)
+CASES = [
+    Case(
+        "dev: Sentinel-2, little cloud",
+        "Show me Sentinel-2 scenes of Milan from March 2025 with little cloud.",
+        "resolve_place; search_scenes sentinel-2-l2a, 2025-03-01 to 2025-03-31, cloud at most 20",
+    ),
+    Case(
+        "dev: radar",
+        "Find radar scenes over Naples for the first week of September 2025.",
+        "resolve_place; search_scenes sentinel-1-grd, 2025-09-01 to 2025-09-07, no cloud limit",
+    ),
+    Case(
+        "dev: German, no clouds",
+        "Sentinel-2-Bilder von Mailand ohne Wolken, Oktober 2025.",
+        "resolve_place; search_scenes sentinel-2-l2a, 2025-10-01 to 2025-10-31, cloud at most 10",
+    ),
+    Case(
+        "dev: follow-up",
+        "And the week after that?",
+        "search_scenes with the previous box, sentinel-1-grd, 2025-09-08 to 2025-09-14, no cloud limit",
+        NAPLES_FIRST_WEEK,
+    ),
+    Case(
+        "synthetic: unknown place",
+        "Show me Sentinel-2 scenes of Zorbania from March 2025.",
+        "resolve_place('Zorbania'), then ask which place; no search",
+    ),
+    Case(
+        "synthetic: misspelt place",
+        "Show me Sentinel-2 scenes of Milna from March 2025.",
+        "resolve_place('Milna') as written, then ask (Milan may be offered); no search, no lookup of Milan",
+    ),
+    Case(
+        "synthetic: before launch",
+        "Find radar scenes over Naples for the first week of March 2014.",
+        "resolve_place; search_scenes 2014-03-01 to 2014-03-07 is refused (before launch); tell the user, "
+        "no search with other dates",
+    ),
 ]
 DECIDE = (
     "Route the user's request. 'delegate' for a satellite scene search, 'decline' for anything the scene "
     "catalogue cannot answer, 'clarify' when no place or no period is given."
 )
 OUT_OF_SCOPE = "What will the weather be like in Naples this weekend?"
-MAX_MODEL_CALLS = 3
+MAX_MODEL_CALLS = 5  # enough to see what a model does after an error
 
 
 class NoScenes:
@@ -66,7 +123,8 @@ class Decision(BaseModel):
 def describe(reply: AIMessage) -> str:
     usage: dict[str, Any] = dict(reply.usage_metadata or {})
     load_ms = (reply.response_metadata.get("load_duration") or 0) / 1e6
-    thinking = bool(reply.additional_kwargs.get("reasoning_content"))
+    # Thinking should be off: it shows up either as reasoning_content or as <think> text in the reply.
+    thinking = bool(reply.additional_kwargs.get("reasoning_content")) or "<think>" in str(reply.content)
     return (
         f"tokens in/out {usage.get('input_tokens')}/{usage.get('output_tokens')}, "
         f"model load {load_ms:.0f} ms, thinking leaked: {thinking}, "
@@ -74,16 +132,19 @@ def describe(reply: AIMessage) -> str:
     )
 
 
-async def ask(model: BaseChatModel, tools: list[BaseTool], question: str) -> None:
+async def ask(model: BaseChatModel, tools: list[BaseTool], case: Case) -> None:
     by_name = {tool.name: tool for tool in tools}
     # The agent's real instructions, with the evaluation's reference date as today.
-    request = RetrievalRequest(text=question, today=REFERENCE_DATE)
+    request = RetrievalRequest(text=case.text, today=REFERENCE_DATE, previous_search=case.previous)
     messages: list[BaseMessage] = [
         SystemMessage(retrieval_system_prompt(REFERENCE_DATE)),
         HumanMessage(retrieval_user_message(request)),
     ]
     bound = model.bind_tools(tools)
-    print(f"\n  Q: {question}")
+    print(f"\n  [{case.label}] {case.text}")
+    if (before := case.previous) is not None:
+        print(f"    (follow-up of {before.place}, {before.start_date} to {before.end_date})")
+    print(f"    expected: {case.expect}")
     for step in range(1, MAX_MODEL_CALLS + 1):
         started = time.perf_counter()
         reply = await bound.ainvoke(messages)
@@ -132,8 +193,8 @@ async def probe(name: str) -> None:
     server = build_server(NoScenes(), Gazetteer.load())
     async with create_connected_server_and_client_session(server) as session:
         tools = [tool for tool in await load_mcp_tools(session) if tool.name != "get_scene"]
-        for question in QUESTIONS:
-            await ask(model, tools, question)
+        for case in CASES:
+            await ask(model, tools, case)
         await decide(model)
     # Unload the model through Ollama's API (keep_alive 0) so the next model has the GPU to itself.
     settings = Settings()
