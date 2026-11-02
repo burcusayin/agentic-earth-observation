@@ -20,8 +20,9 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
   - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
   - `catalog_mcp/`: `server.py`, the MCP server with four tools (no LLM), and `tool_log.py`, the record of
     every tool call.
-  - `retrieval_agent/`: `models.py` (request and result), `prompts.py`, and `agent.py` (the LangGraph loop and
-    `run_retrieval`, one turn over MCP); its A2A server is not yet implemented.
+  - `retrieval_agent/`: `models.py` (request and result), `prompts.py`, `agent.py` (the LangGraph loop and
+    `run_retrieval`, one turn over MCP), `a2a_server.py` (the agent over A2A) and `__main__.py` (one question
+    from the command line).
   - `orchestrator/`: the LangGraph orchestrator; an A2A client (not yet implemented).
   - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded

@@ -196,3 +196,23 @@ decision is made or reversed; do not rewrite old entries.
   as text (`"[9.04, ...]"`), langchain-ollama parses it before the call reaches our server, which then never
   sees the text that it would refuse (decision above). langchain-mistralai does not do this. The repair is part
   of the local-against-API difference the evaluation measures, and the write-up states it.
+
+## 2026-11-03
+- **How the retrieval agent is served over A2A** (`retrieval_agent/a2a_server.py`, a2a-sdk 1.2.2). Checked by
+  reading the SDK and by running it in-process.
+  - **Requests and results travel as JSON text** (a text part with media type `application/json`), each validated
+    with its model's `model_validate_json`. A data part carries every number as a double, so `"limit": 3`
+    arrives as `3.0`, which the strict models refuse.
+  - **The trace id travels in the request's metadata** (`trace_id`), and a request without a valid one is
+    refused: the MCP server would otherwise file the turn's calls under no trace.
+  - **Every answer is a task**, on the SDK's current request handler. Answering with a message instead leaves
+    four asyncio tasks behind per request with that handler.
+  - **What a task's final state means:**
+    - completed: `run_retrieval` returned a result, an infrastructure failure (`infra_error`) included;
+    - rejected: the request could not be read (no valid trace id, not exactly one JSON text part, an invalid
+      `RetrievalRequest`), with the reason;
+    - failed: a bug or a configuration error. The client is told only the error's type and the details go to
+      the server log, because the SDK would otherwise send the error's own text to the client.
+  - **Only this machine may start a turn:** the server binds to 127.0.0.1; a Host other than 127.0.0.1 or
+    localhost is refused (400), and so is any request with an Origin header (403), so that a web page cannot
+    start an agent run. The SDK's client sends no Origin.

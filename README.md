@@ -18,7 +18,7 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | Gazetteer: place names to boxes, from OpenStreetMap | `src/agentic_earth_observation/catalog/gazetteer.py` | Done |
 | MCP server with four tools | `src/agentic_earth_observation/catalog_mcp/server.py` | Done |
 | Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
-| Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | In progress: the agent runs; A2A to come |
+| Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
 | Orchestrator (LangGraph), an A2A client | `src/agentic_earth_observation/orchestrator/` | Planned |
 | Evaluation runner and results | `src/agentic_earth_observation/evals/run_eval.py` | Planned |
 
@@ -61,21 +61,25 @@ The details are in [docs/evaluation.md](docs/evaluation.md), and the design deci
 
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/) and make; the MCP Inspector also needs Node.
+Requires [uv](https://docs.astral.sh/uv/) and make; the MCP Inspector also needs Node, and the agents need
+[Ollama](https://ollama.com) with the model in `EO_LLM_MODEL` pulled.
 
 ```bash
 make setup        # .venv from uv.lock (uv's own Python 3.13) and the git hooks
 make check        # lint, format check, mypy --strict, tests with coverage (no network, no models)
 make serve-mcp    # the catalogue MCP server on http://127.0.0.1:8001/mcp
 make inspector    # in a second terminal: try the tools by hand in the MCP Inspector
+make serve-agent  # in a second terminal: the retrieval agent over A2A on http://127.0.0.1:8002
+uv run python -m agentic_earth_observation.retrieval_agent "<a question>"   # one question, through MCP
 uv run python -m agentic_earth_observation.evals.golden   # validate the golden set and print its hash
 ```
 
 Any MCP client can use the running server. For example, to add it to Claude Code:
 `claude mcp add --transport http eo-catalog http://127.0.0.1:8001/mcp`.
 
-`.env.example` lists every setting with its default. The MCP server already reads the catalogue, timeout and
-tool-log settings; the agents will read the rest (model provider, model, keys).
+`.env.example` lists every setting with its default. The MCP server reads the catalogue, timeout and tool-log
+settings; the retrieval agent reads the model and timeout settings as well. The Mistral provider is not wired up
+yet.
 
 ## How this repository is developed
 
