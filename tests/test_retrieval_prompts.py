@@ -15,12 +15,15 @@ from agentic_earth_observation.retrieval_agent.prompts import (
     retrieval_user_message,
 )
 
-NAPLES_WEEK = PreviousSearch(
-    product=Product.SENTINEL_1_GRD,
-    bbox=[14.1321, 40.7912, 14.3538, 40.9161],
-    start_date=date(2025, 9, 1),
-    end_date=date(2025, 9, 7),
-)
+
+def naples_week() -> PreviousSearch:
+    return PreviousSearch(
+        place="Naples",
+        product=Product.SENTINEL_1_GRD,
+        bbox=[14.1321, 40.7912, 14.3538, 40.9161],
+        start_date=date(2025, 9, 1),
+        end_date=date(2025, 9, 7),
+    )
 
 
 def test_the_prompt_states_today() -> None:
@@ -56,7 +59,7 @@ def test_a_first_request_is_just_the_users_words() -> None:
 
 def test_a_follow_up_carries_the_previous_search_exactly() -> None:
     request = RetrievalRequest(
-        text="And the week after that?", today=date(2025, 12, 15), previous_search=NAPLES_WEEK
+        text="And the week after that?", today=date(2025, 12, 15), previous_search=naples_week()
     )
     assert retrieval_user_message(request) == (
         "REQUEST: And the week after that?\n"
@@ -67,6 +70,7 @@ def test_a_follow_up_carries_the_previous_search_exactly() -> None:
 
 def test_a_follow_up_carries_the_cloud_limit_and_the_limit_when_they_were_set() -> None:
     milan_march = PreviousSearch(
+        place="Milan",
         product=Product.SENTINEL_2_L2A,
         bbox=[9.0409, 45.3867, 9.2781, 45.5358],
         start_date=date(2025, 3, 1),
