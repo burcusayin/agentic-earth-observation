@@ -85,3 +85,10 @@ decision is made or reversed; do not rewrite old entries.
   No task needs it and five forbid it, so offering it would only cost steps and prompt tokens.
 - **After `resolve_place` reports an unknown place, the agent is not forced to stop.** The clarify tasks then
   measure whether the model asks or guesses.
+
+## 2026-11-02
+- **The retrieval prompt names `search_scenes` in its steps.** With the first full prompt, ministral-3:8b
+  answered straight after `resolve_place` on both dev search questions and claimed a search it had not made: it
+  read "when the search returns" as the place lookup's reply. "Once you have the bbox, call search_scenes" and
+  "when search_scenes returns" fixed both. qwen3.5:9b's calls did not change. Checked on the dev questions, the
+  dev follow-up and a made-up place only.

@@ -4,7 +4,8 @@
     uv run python scripts/probe_models.py qwen3.5:9b      # one model
 
 The MCP server runs in-process with the real tool schemas and an offline catalogue that finds nothing, so no
-request leaves the machine. Only dev-split questions are used. Models are probed one at a time and unloaded
+request leaves the machine. The model gets the retrieval agent's real instructions, dated with the
+evaluation's reference date. Only dev-split questions are used. Models are probed one at a time and unloaded
 afterwards, so two never share the GPU.
 """
 
@@ -29,17 +30,16 @@ from agentic_earth_observation.catalog.stac import SceneSummary
 from agentic_earth_observation.catalog_mcp.server import build_server
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.domain import Product, SearchRequest
+from agentic_earth_observation.evals.golden import REFERENCE_DATE
 from agentic_earth_observation.llm import build_chat_model
+from agentic_earth_observation.retrieval_agent.models import RetrievalRequest
+from agentic_earth_observation.retrieval_agent.prompts import retrieval_system_prompt, retrieval_user_message
 
 MODELS = ["qwen3.5:9b", "ministral-3:8b"]
 QUESTIONS = [
     "Show me Sentinel-2 scenes of Milan from March 2025 with little cloud.",
     "Find radar scenes over Naples for the first week of September 2025.",
 ]
-SYSTEM = (
-    "You find satellite scenes with the tools. Resolve the place with resolve_place first, then call "
-    "search_scenes with the box it returns. Never invent coordinates or scene ids. Today is 2025-12-15."
-)
 DECIDE = (
     "Route the user's request. 'delegate' for a satellite scene search, 'decline' for anything the scene "
     "catalogue cannot answer, 'clarify' when no place or no period is given."
@@ -76,7 +76,12 @@ def describe(reply: AIMessage) -> str:
 
 async def ask(model: BaseChatModel, tools: list[BaseTool], question: str) -> None:
     by_name = {tool.name: tool for tool in tools}
-    messages: list[BaseMessage] = [SystemMessage(SYSTEM), HumanMessage(question)]
+    # The agent's real instructions, with the evaluation's reference date as today.
+    request = RetrievalRequest(text=question, today=REFERENCE_DATE)
+    messages: list[BaseMessage] = [
+        SystemMessage(retrieval_system_prompt(REFERENCE_DATE)),
+        HumanMessage(retrieval_user_message(request)),
+    ]
     bound = model.bind_tools(tools)
     print(f"\n  Q: {question}")
     for step in range(1, MAX_MODEL_CALLS + 1):
