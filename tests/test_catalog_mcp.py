@@ -16,7 +16,7 @@ from mcp.types import CallToolResult, TextContent
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog_mcp.server import build_server
 from agentic_earth_observation.domain import Product
-from tests.fakes import ROME_JULY, SCENE, FakeCatalog
+from tests.fakes import ROME_JULY, SCENE, BlockingCatalog, FakeCatalog
 
 pytestmark = pytest.mark.anyio
 
@@ -144,6 +144,26 @@ class TestGetScene:
         result = await call(server(FakeCatalog(fail=True)), "get_scene", arguments)
         assert result.isError
         assert "did not answer" in error_text(result)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "what"),
+    [
+        ("search_scenes", ROME_JULY, "scene search"),
+        ("get_scene", {"product": "sentinel-2-l2a", "scene_id": SCENE.id}, "scene lookup"),
+    ],
+)
+async def test_a_catalogue_that_does_not_answer_in_time_is_reported(
+    tool: str, arguments: dict[str, Any], what: str
+) -> None:
+    catalog = BlockingCatalog()
+    mcp = build_server(catalog, Gazetteer.load(), catalog_deadline_s=0.05)
+    try:
+        result = await call(mcp, tool, arguments)
+    finally:
+        catalog.release.set()
+    assert result.isError
+    assert f"{what} failed: the catalogue did not answer within 0.05 s" in error_text(result)
 
 
 class TestArgumentProtection:

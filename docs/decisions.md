@@ -100,3 +100,15 @@ decision is made or reversed; do not rewrite old entries.
   together can finish in any order. It also records cancelled calls and names unknown tools. The server checks
   at start-up that the log can be written; a later write failure reaches the model only as a fixed message,
   never with a local path, and never hides the tool's own error.
+- **Each catalogue call has a hard deadline** (`EO_STAC_DEADLINE_S`, 90 s, retries included). A missed deadline
+  is a catalogue error, so it counts as infrastructure. This replaces an estimate of the worst case, which could
+  not cover slow reads or `Retry-After` waits. The STAC client now ignores `Retry-After`, which urllib3 would
+  otherwise honour for hours. The timeouts nest: one STAC request < STAC deadline < MCP < retrieval turn < A2A <
+  harness, and one model call < retrieval turn.
+- **Settings are strict.**
+  - An empty variable means the default, and a misspelt `EO_` name is refused, whether it comes from the
+    environment or from `.env`.
+  - Errors never show a value, so a misspelt key cannot leak a secret.
+  - A relative tool-log path starts at the repository root, and the log cannot be turned off from the
+    environment.
+  - At least 4 model calls per turn: place, search, one retry and the reply.

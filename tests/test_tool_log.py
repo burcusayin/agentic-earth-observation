@@ -28,7 +28,7 @@ from agentic_earth_observation.catalog_mcp.tool_log import (
     returned_ids,
 )
 from agentic_earth_observation.domain import SearchRequest
-from tests.fakes import ROME_JULY, SCENE, FakeCatalog
+from tests.fakes import ROME_JULY, SCENE, BlockingCatalog, FakeCatalog
 
 pytestmark = pytest.mark.anyio
 
@@ -58,20 +58,6 @@ def record(trace_id: str = "turn-1", request_id: int = 1, name: str = "Milan") -
     return ToolCallRecord(
         trace_id=trace_id, request_id=request_id, tool="resolve_place", arguments={"name": name}, ok=True
     )
-
-
-class BlockingCatalog(FakeCatalog):
-    """Holds every search until `release` is set, so that a test can cancel a call in progress."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.started = threading.Event()
-        self.release = threading.Event()
-
-    def search(self, request: SearchRequest) -> list[SceneSummary]:
-        self.started.set()
-        self.release.wait(timeout=5)
-        return super().search(request)
 
 
 class FirstFinishesLastCatalog(FakeCatalog):
@@ -144,6 +130,18 @@ async def test_a_catalogue_failure_is_recorded_as_infrastructure(
     (record,) = all_records(log)
     assert record["ok"] is False
     assert record["error_kind"] == "catalogue"
+
+
+async def test_a_missed_catalogue_deadline_is_recorded_as_infrastructure(tmp_path: Path) -> None:
+    log = tmp_path / "calls.jsonl"
+    catalog = BlockingCatalog()
+    mcp = build_server(catalog, Gazetteer.load(), ToolCallLog(log), catalog_deadline_s=0.05)
+    try:
+        await call(mcp, "search_scenes", ROME_JULY)
+    finally:
+        catalog.release.set()
+    (record,) = all_records(log)
+    assert (record["ok"], record["error_kind"]) == (False, "catalogue")
 
 
 async def test_a_cancelled_call_is_recorded(tmp_path: Path) -> None:

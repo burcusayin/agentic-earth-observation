@@ -77,21 +77,31 @@ class SceneSummary(BaseModel):
         return value.astimezone(UTC)  # dates are compared in UTC, like the request's date range
 
 
+def retry_policy(max_retries: int) -> Retry:
+    """How failed catalogue requests are retried: on rate limits and server errors, with a short backoff.
+
+    Searches are read-only, so retrying a POST is safe. A server's Retry-After header is ignored: urllib3
+    would otherwise wait as long as the server asks (hours), far past every timeout in Settings.
+    """
+    return Retry(
+        total=max_retries,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=None,
+        raise_on_status=False,
+        respect_retry_after_header=False,
+    )
+
+
 class StacCatalog:
     """Searches one STAC API. Construction makes no network call; the connection opens on first use."""
 
     def __init__(self, url: str = EARTH_SEARCH_URL, *, timeout_s: float = 20.0, max_retries: int = 3) -> None:
         self._url = url
         self._timeout_s = timeout_s
-        # Searches are read-only, so retrying a POST is safe; back off on rate limits and server errors.
-        retry = Retry(
-            total=max_retries,
-            backoff_factor=0.5,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=None,
-            raise_on_status=False,
+        self._io = StacApiIO(
+            headers={"User-Agent": USER_AGENT}, timeout=timeout_s, max_retries=retry_policy(max_retries)
         )
-        self._io = StacApiIO(headers={"User-Agent": USER_AGENT}, timeout=timeout_s, max_retries=retry)
         self._client: Client | None = None
         self._lock = threading.Lock()  # tools call the catalogue from several threads
 

@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_eo_variables_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts without the developer's EO_* variables; a test that needs one sets it."""
+    for name in list(os.environ):
+        if name.upper().startswith("EO_"):
+            monkeypatch.delenv(name)
 
 
 def _keep_only_content_type(response: dict[str, Any]) -> dict[str, Any]:

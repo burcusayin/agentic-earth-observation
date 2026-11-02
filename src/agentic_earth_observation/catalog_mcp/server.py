@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, NamedTuple, Protocol
 
@@ -263,8 +263,30 @@ INSTRUCTIONS = (
 )
 
 
-def build_server(catalog: Catalog, gazetteer: Gazetteer, tool_log: ToolCallLog | None = None) -> FastMCP:
-    """The MCP server with its four tools, using the given catalogue and gazetteer; calls go to `tool_log`."""
+async def _ask_catalogue[T](what: str, ask: Callable[[], T], deadline_s: float | None) -> T:
+    """Run a blocking catalogue call in a worker thread and stop waiting after `deadline_s` seconds.
+
+    A late answer is dropped. The thread itself cannot be stopped; it ends when its HTTP timeouts do.
+    """
+    try:
+        async with asyncio.timeout(deadline_s):
+            return await asyncio.to_thread(ask)
+    except TimeoutError:
+        raise CatalogError(f"{what} failed: the catalogue did not answer within {deadline_s:g} s") from None
+
+
+def build_server(
+    catalog: Catalog,
+    gazetteer: Gazetteer,
+    tool_log: ToolCallLog | None = None,
+    *,
+    catalog_deadline_s: float | None = None,
+) -> FastMCP:
+    """The MCP server with its four tools, using the given catalogue and gazetteer; calls go to `tool_log`.
+
+    Each call to the catalogue gets at most `catalog_deadline_s` seconds (None: no limit), so a tool call
+    always answers before the agent's MCP timeout.
+    """
     mcp = CatalogMCP(
         "eo-catalog", instructions=INSTRUCTIONS, host=HOST, port=PORT, stateless_http=True, json_response=True
     )
@@ -343,7 +365,7 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer, tool_log: ToolCallLog |
             raise ToolError(explain(err)) from err
 
         try:
-            scenes = await asyncio.to_thread(catalog.search, request)
+            scenes = await _ask_catalogue("scene search", lambda: catalog.search(request), catalog_deadline_s)
         except CatalogError as err:
             raise ToolError(str(err)) from err
 
@@ -364,7 +386,9 @@ def build_server(catalog: Catalog, gazetteer: Gazetteer, tool_log: ToolCallLog |
     ) -> SceneResult:
         """Get one scene by its id. Use it only with ids that search_scenes returned."""
         try:
-            scene = await asyncio.to_thread(catalog.get_scene, product, scene_id)
+            scene = await _ask_catalogue(
+                "scene lookup", lambda: catalog.get_scene(product, scene_id), catalog_deadline_s
+            )
         except CatalogError as err:
             raise ToolError(str(err)) from err
         return SceneResult(found=scene is not None, scene=scene)
@@ -378,7 +402,9 @@ def main() -> None:
     catalog = StacCatalog(
         settings.stac_api_url, timeout_s=settings.stac_timeout_s, max_retries=settings.stac_max_retries
     )
-    build_server(catalog, Gazetteer.load(), ToolCallLog(settings.tool_log)).run(transport="streamable-http")
+    log = ToolCallLog(settings.tool_log)
+    server = build_server(catalog, Gazetteer.load(), log, catalog_deadline_s=settings.stac_deadline_s)
+    server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from agentic_earth_observation.catalog.stac import (
     SceneSummary,
     StacCatalog,
     matches,
+    retry_policy,
     summarise,
 )
 from agentic_earth_observation.domain import BBox, Product, SearchRequest
@@ -182,6 +183,13 @@ def feature_collection(*items: dict[str, Any]) -> str:
 
 
 class TestNetworkBehaviour:
+    def test_retries_back_off_briefly_and_ignore_retry_after(self) -> None:
+        retry = retry_policy(3)
+        assert retry.total == 3
+        assert retry.respect_retry_after_header is False  # a 429 asking for an hour must not block a worker
+        assert set(retry.status_forcelist or ()) == {429, 500, 502, 503, 504}
+        assert retry.backoff_factor == 0.5
+
     def test_the_timeout_survives_opening_the_catalogue(self, monkeypatch: pytest.MonkeyPatch) -> None:
         timeouts = fake_network(monkeypatch, search=feature_collection(raw_item()))
         StacCatalog(URL, timeout_s=20.0).search(ROME_JULY_CLOUD_10)

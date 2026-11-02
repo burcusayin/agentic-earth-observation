@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 
 from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary
@@ -43,3 +44,22 @@ class FakeCatalog:
         if self.fail:
             raise CatalogError("scene lookup failed: the catalogue did not answer (Read timed out)")
         return next((s for s in self.scenes if s.id == scene_id and s.product is product), None)
+
+
+class BlockingCatalog(FakeCatalog):
+    """Holds every call until `release` is set, so that a test can time out or cancel a call in progress."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def search(self, request: SearchRequest) -> list[SceneSummary]:
+        self.started.set()
+        self.release.wait(timeout=5)
+        return super().search(request)
+
+    def get_scene(self, product: Product, scene_id: str) -> SceneSummary | None:
+        self.started.set()
+        self.release.wait(timeout=5)
+        return super().get_scene(product, scene_id)
