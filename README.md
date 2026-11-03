@@ -70,6 +70,7 @@ make check        # lint, format check, mypy --strict, tests with coverage (no n
 make serve-mcp    # the catalogue MCP server on http://127.0.0.1:8001/mcp
 make inspector    # in a second terminal: try the tools by hand in the MCP Inspector
 make serve-agent  # in a second terminal: the retrieval agent over A2A on http://127.0.0.1:8002
+uv run eo-agent chat   # in a third terminal: talk to the assistant (both servers and Ollama running)
 uv run python -m agentic_earth_observation.retrieval_agent "<a question>"   # one question, through MCP
 uv run python -m agentic_earth_observation.evals.golden   # validate the golden set and print its hash
 ```

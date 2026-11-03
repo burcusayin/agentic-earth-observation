@@ -24,6 +24,7 @@ from tests.fakes import (
     CONNECTION_REFUSED,
     MID_STREAM,
     SCENE,
+    FakeClient,
     FakeOllama,
     OllamaError,
     OllamaStep,
@@ -60,21 +61,6 @@ NO_PLACE = ollama_tool_call("Decision", route="clarify", reason="missing_place")
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
-
-class FakeClient:
-    """Stands in for the A2A client: records each call, then returns or raises the next scripted outcome."""
-
-    def __init__(self, *outcomes: RetrievalResult | Exception) -> None:
-        self.outcomes = list(outcomes)
-        self.calls: list[tuple[RetrievalRequest, str]] = []
-
-    async def retrieve(self, request: RetrievalRequest, trace_id: str) -> RetrievalResult:
-        self.calls.append((request, trace_id))
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
 
 
 def orchestrator(decisions: list[OllamaStep], client: FakeClient) -> tuple[Orchestrator, FakeOllama]:

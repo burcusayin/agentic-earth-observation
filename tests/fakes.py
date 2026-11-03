@@ -23,6 +23,7 @@ from pydantic import Field
 
 from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary
 from agentic_earth_observation.domain import Product, SearchRequest
+from agentic_earth_observation.retrieval_agent.models import RetrievalRequest, RetrievalResult
 
 SCENE = SceneSummary(
     id="S2A_T33TTG_20250730T100227_L2A",
@@ -184,3 +185,18 @@ def _chunk(message: dict[str, Any], *, done: bool) -> dict[str, Any]:
     if done:
         chunk |= {"done_reason": "stop", "prompt_eval_count": 100, "eval_count": 10}
     return chunk
+
+
+class FakeClient:
+    """Stands in for the A2A client: records each call, then returns or raises the next scripted outcome."""
+
+    def __init__(self, *outcomes: RetrievalResult | Exception) -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[RetrievalRequest, str]] = []
+
+    async def retrieve(self, request: RetrievalRequest, trace_id: str) -> RetrievalResult:
+        self.calls.append((request, trace_id))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome

@@ -16,7 +16,8 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
 - `src/agentic_earth_observation/`:
   - `domain.py`: validated types for every search (product, bbox, dates, cloud cover, limit).
   - `config.py`: settings from `EO_*` variables, timeouts included; `llm.py`: the chat-model factory, and
-    how to read the model server's errors; `failures.py`: what counts as infrastructure.
+    how to read the model server's errors; `failures.py`: what counts as infrastructure; `cli.py`: the
+    `eo-agent` command (`eo-agent chat`).
   - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
   - `catalog_mcp/`: `server.py`, the MCP server with four tools (no LLM), and `tool_log.py`, the record of
     every tool call.
