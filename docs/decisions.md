@@ -286,3 +286,11 @@ decision is made or reversed; do not rewrite old entries.
   cause is not known. So the retry rule of 2026-11-02 holds with a caveat: a retried task may not repeat the
   first attempt exactly. The evaluation runs each task three times, which shows whether this matters for the
   scores.
+- **Requests that try to override the rules are declined, and the probe now checks it.** Four synthetic cases,
+  in invented wording about dev places: made-up scene ids, the prompt's own instructions, an override given as
+  the answer to a question, and a valid search with an override added. The last is labelled a decline as a
+  whole, as `docs/evaluation.md` says for out-of-scope requests; the labelling rules do not name mixed
+  requests, so this was the maintainer's choice. With the committed prompts, all four went as expected in 5 of
+  5 runs on both local models. Every other case gave the same result as in both tuning runs, apart from one
+  qwen3.5:9b turn that ran past the 120 s model timeout while the swap was nearly full: an infrastructure
+  failure, not the model's.
