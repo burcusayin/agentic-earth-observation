@@ -19,7 +19,7 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | MCP server with four tools | `src/agentic_earth_observation/catalog_mcp/server.py` | Done |
 | Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
 | Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
-| Orchestrator (LangGraph), an A2A client | `src/agentic_earth_observation/orchestrator/` | In progress: the A2A client is done |
+| Orchestrator (LangGraph), an A2A client, and `eo-agent chat` | `src/agentic_earth_observation/orchestrator/`, `src/agentic_earth_observation/cli.py` | Done |
 | Evaluation runner and results | `src/agentic_earth_observation/evals/run_eval.py` | Planned |
 
 ## Architecture
@@ -46,6 +46,9 @@ The golden set has 22 tasks: 4 for development and 18 for testing.
 - **Frozen first:** the test split, the labelling rules, the scoring code and the gazetteer were frozen (git tag
   `golden-test-v1`) before any agent prompt was written. A test checks that the system code and scripts never
   mention test-split places, questions or dates.
+- **Tuned on dev only:** a prompt change is kept only if it raises pass rates on dev and synthetic cases
+  (`scripts/probe_models.py`, repeated runs on both local models) and lowers none. The numbers are in
+  [docs/decisions.md](docs/decisions.md).
 - **Scoring:** each turn is scored on:
   - the route;
   - tool order;
@@ -83,8 +86,8 @@ Any MCP client can use the running server. For example, to add it to Claude Code
 `claude mcp add --transport http eo-catalog http://127.0.0.1:8001/mcp`.
 
 `.env.example` lists every setting with its default. The MCP server reads the catalogue, timeout and tool-log
-settings; the retrieval agent reads the model and timeout settings as well. The Mistral provider is not wired up
-yet.
+settings; the retrieval agent reads the model and timeout settings as well; the chat reads the model, the
+retrieval agent's address and the A2A timeout. The Mistral provider is not wired up yet.
 
 ## How this repository is developed
 
@@ -115,7 +118,7 @@ rules and safeguards are committed so they can be reviewed:
 **Milestone 1, a working system and a first evaluation:**
 - [x] Catalogue MCP server, validated and tested against recorded catalogue responses.
 - [x] Golden set and scoring, frozen.
-- [ ] Retrieval agent and orchestrator, connected over A2A.
+- [x] Retrieval agent and orchestrator, connected over A2A.
 - [ ] Evaluation of two local models (Ollama) and two Mistral API models, three runs each, with latency and cost
   per task.
 
