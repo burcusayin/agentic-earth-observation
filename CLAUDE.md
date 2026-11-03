@@ -15,10 +15,17 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
   - Add a dated entry when a decision is made or reversed.
 - `src/agentic_earth_observation/`:
   - `domain.py`: validated types for every search (product, bbox, dates, cloud cover, limit).
+  - `config.py`: settings from `EO_*` variables, timeouts included; `llm.py`: the chat-model factory, and
+    how to read the model server's errors; `failures.py`: what counts as infrastructure; `cli.py`: the
+    `eo-agent` command (`eo-agent chat`).
   - `catalog/`: `stac.py` (Earth Search client) and `gazetteer.py` (place names to boxes).
-  - `catalog_mcp/`: the MCP server with four tools; no LLM.
-  - `retrieval_agent/`: the LangGraph agent and its A2A server (not yet implemented).
-  - `orchestrator/`: the LangGraph orchestrator; an A2A client (not yet implemented).
+  - `catalog_mcp/`: `server.py`, the MCP server with four tools (no LLM), and `tool_log.py`, the record of
+    every tool call.
+  - `retrieval_agent/`: `models.py` (request and result), `prompts.py`, `agent.py` (the LangGraph loop and
+    `run_retrieval`, one turn over MCP), `a2a_server.py` (the agent over A2A) and `__main__.py` (one question
+    from the command line).
+  - `orchestrator/`: `graph.py` (the LangGraph orchestrator and `run_turn`), `models.py` (decision and turn
+    output), `prompts.py`, `replies.py` (the reply templates) and `client.py` (the A2A client).
   - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.

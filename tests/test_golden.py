@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
-from agentic_earth_observation.evals.golden import Task, check_tasks, evaluation_code_hash, load_golden
+from agentic_earth_observation.evals import golden
+from agentic_earth_observation.evals.golden import (
+    GoldenError,
+    Task,
+    check_tasks,
+    evaluation_code_hash,
+    golden_hash,
+    load_golden,
+    load_tasks,
+)
 
 
 def task(**overrides: object) -> dict[str, Any]:
@@ -137,3 +149,83 @@ def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:
     assert first == evaluation_code_hash()
     assert len(first) == 64
     assert all(c in "0123456789abcdef" for c in first)
+
+
+class TestGapsFoundInTheNovemberReview:
+    """Validation rules that the review of 2 Nov 2026 found untested. golden.py is frozen."""
+
+    @pytest.mark.parametrize(
+        ("change", "reason"),
+        [
+            ({"cloud": [0, 120]}, "within 0-100"),
+            ({"cloud": [-5, 10]}, "within 0-100"),
+        ],
+    )
+    def test_rejects_a_cloud_range_outside_0_to_100(self, change: dict[str, object], reason: str) -> None:
+        search = {**expect()["search"], **change}
+        with pytest.raises(ValidationError, match=reason):
+            Task.model_validate(task(turns=one_turn(expect(search=search))))
+
+    @pytest.mark.parametrize(
+        ("expectation", "reason"),
+        [
+            ({"required_tools": ["resolve_place"]}, "needs search_scenes in required_tools"),
+            ({"route": []}, "at least one route"),
+            (
+                {"route": "decline", "required_tools": [], "forbidden_tools": ["search_scenes"]},
+                "cannot expect a search",
+            ),
+        ],
+    )
+    def test_rejects_an_expectation_that_contradicts_itself(
+        self, expectation: dict[str, object], reason: str
+    ) -> None:
+        with pytest.raises(ValidationError, match=reason):
+            Task.model_validate(task(turns=one_turn(expect(**expectation))))
+
+    def test_only_a_follow_up_has_more_than_one_turn(self) -> None:
+        turn = task()["turns"][0]
+        with pytest.raises(ValidationError, match="exactly one turn"):
+            Task.model_validate(task(turns=[turn, turn]))
+
+    def test_finds_an_alias_used_as_a_place_key(self, gazetteer: Gazetteer) -> None:
+        search = {**expect()["search"], "place": "firenze"}  # an alias of the key "florence"
+        problems = check_tasks([Task.model_validate(task(turns=one_turn(expect(search=search))))], gazetteer)
+        assert problems == ["s2-florence-july turn 1: 'firenze' is not a gazetteer key"]
+
+    def test_finds_a_search_that_ends_after_the_reference_date(self, gazetteer: Gazetteer) -> None:
+        search = {**expect()["search"], "start": "2025-12-01", "end": "2025-12-31"}
+        problems = check_tasks([Task.model_validate(task(turns=one_turn(expect(search=search))))], gazetteer)
+        assert problems == ["s2-florence-july turn 1: ends after the reference date 2025-12-15"]
+
+    def test_finds_a_task_in_the_wrong_split_file(self, tmp_path: Path) -> None:
+        (tmp_path / "dev.jsonl").write_text(json.dumps(task(split="test")) + "\n", encoding="utf-8")
+        (tmp_path / "test.jsonl").write_text("", encoding="utf-8")
+        with pytest.raises(GoldenError, match=r"dev\.jsonl contains tasks of another split"):
+            load_golden(tmp_path)
+
+    def test_a_bad_file_names_every_invalid_line(self, tmp_path: Path) -> None:
+        path = tmp_path / "test.jsonl"
+        path.write_text(json.dumps(task()) + "\n\n" + '{"id": "x"}\n' + "not json\n", encoding="utf-8")
+        with pytest.raises(GoldenError) as raised:
+            load_tasks(path)
+        assert "test.jsonl:3" in str(raised.value)
+        assert "test.jsonl:4" in str(raised.value)
+        assert "test.jsonl:1" not in str(raised.value)
+        with pytest.raises(GoldenError, match="cannot read"):
+            load_tasks(tmp_path / "missing.jsonl")
+
+    def test_the_golden_hash_names_the_exact_files(self, tmp_path: Path) -> None:
+        for split in ("dev", "test"):
+            (tmp_path / f"{split}.jsonl").write_text(json.dumps(task(split=split)) + "\n", encoding="utf-8")
+        both = (tmp_path / "dev.jsonl").read_bytes() + (tmp_path / "test.jsonl").read_bytes()
+        assert golden_hash(tmp_path) == hashlib.sha256(both).hexdigest()
+        (tmp_path / "test.jsonl").write_text(
+            json.dumps(task(split="test", notes="edited")) + "\n", encoding="utf-8"
+        )
+        assert golden_hash(tmp_path) != hashlib.sha256(both).hexdigest()
+
+    def test_the_evaluation_code_hash_covers_validation_and_scoring(self) -> None:
+        folder = Path(golden.__file__).parent
+        code = (folder / "golden.py").read_bytes() + (folder / "scoring.py").read_bytes()
+        assert evaluation_code_hash() == hashlib.sha256(code).hexdigest()

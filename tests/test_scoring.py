@@ -224,3 +224,43 @@ class TestRulesAddedInReview:
         score = score_turn(searched_or_declined, TurnTrace(route=Route.DECLINE, status="declined"), gazetteer)
         assert score.arguments is None
         assert score.route
+
+
+class TestGapsFoundInTheNovemberReview:
+    """Rules of docs/evaluation.md that the review of 2 Nov 2026 found untested; the scoring is frozen."""
+
+    def test_an_asked_limit_must_match_exactly(self, gazetteer: Gazetteer) -> None:
+        asked = SEARCH.model_copy(update={"limit": 5})
+        assert score_arguments(asked, {**GOOD_ARGUMENTS, "limit": 5}, gazetteer).limit
+        assert not score_arguments(asked, GOOD_ARGUMENTS, gazetteer).limit  # left out means the default, 10
+        assert not score_arguments(asked, {**GOOD_ARGUMENTS, "limit": 10}, gazetteer).limit
+        assert not score_arguments(asked, {**GOOD_ARGUMENTS, "limit": 4}, gazetteer).limit
+
+    @pytest.mark.parametrize("name", Gazetteer.load().known_places())
+    def test_the_box_threshold_rewards_copying_for_every_place(self, gazetteer: Gazetteer, name: str) -> None:
+        # The comment on MIN_BBOX_IOU claims this for every gazetteer place, not only the one tested above.
+        place = gazetteer.resolve(name)
+        assert place is not None
+        expected = SEARCH.model_copy(update={"place": place.key})
+        box = place.bbox.as_list()
+        three = [round(v, 3) for v in box]
+        two = [round(v, 2) for v in box]
+        assert score_arguments(expected, {**GOOD_ARGUMENTS, "bbox": three}, gazetteer).bbox
+        assert not score_arguments(expected, {**GOOD_ARGUMENTS, "bbox": two}, gazetteer).bbox
+
+    def test_the_expected_status_follows_the_last_successful_search(self, gazetteer: Gazetteer) -> None:
+        # A first search found scenes, a corrected one found none: the answer must say none were found.
+        calls = [
+            ToolCall(name="resolve_place"),
+            ToolCall(
+                name="search_scenes", arguments={**GOOD_ARGUMENTS, "max_cloud_cover": 20}, returned_ids=IDS
+            ),
+            ToolCall(name="search_scenes", arguments=GOOD_ARGUMENTS),
+        ]
+        assert score_turn(EXPECT, trace(calls=calls, cited=[], status="empty"), gazetteer).passed
+        assert not score_turn(EXPECT, trace(calls=calls, cited=IDS[:1], status="empty"), gazetteer).outcome
+        assert not score_turn(EXPECT, trace(calls=calls, cited=IDS[:1], status="ok"), gazetteer).outcome
+
+    def test_precision_when_nothing_or_one_scene_twice_is_cited(self) -> None:
+        assert retrieval_metrics([], IDS, limit=10) == (0.0, 0.0)  # scenes existed, none were returned
+        assert retrieval_metrics([IDS[0], IDS[0]], IDS, limit=10) == (1.0, 0.5)  # a repeat counts once

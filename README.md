@@ -18,8 +18,8 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | Gazetteer: place names to boxes, from OpenStreetMap | `src/agentic_earth_observation/catalog/gazetteer.py` | Done |
 | MCP server with four tools | `src/agentic_earth_observation/catalog_mcp/server.py` | Done |
 | Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
-| Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Planned |
-| Orchestrator (LangGraph), an A2A client | `src/agentic_earth_observation/orchestrator/` | Planned |
+| Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
+| Orchestrator (LangGraph), an A2A client, and `eo-agent chat` | `src/agentic_earth_observation/orchestrator/`, `src/agentic_earth_observation/cli.py` | Done |
 | Evaluation runner and results | `src/agentic_earth_observation/evals/run_eval.py` | Planned |
 
 ## Architecture
@@ -30,7 +30,7 @@ user question
 orchestrator (LangGraph)            decides: delegate / decline / clarify
      |  A2A task
 retrieval agent (LangGraph, A2A server)
-     |  MCP tool calls: list_products, resolve_place, search_scenes, get_scene
+     |  MCP tool calls: list_products, resolve_place, search_scenes
 catalogue MCP server  -->  Earth Search STAC API (Sentinel-1 and Sentinel-2 scene metadata)
 ```
 
@@ -44,8 +44,11 @@ The golden set has 22 tasks: 4 for development and 18 for testing.
   requests including a prompt injection, unknown or misspelt places, radar with a cloud limit, dates before a
   satellite launched, and a search with no results.
 - **Frozen first:** the test split, the labelling rules, the scoring code and the gazetteer were frozen (git tag
-  `golden-test-v1`) before any agent prompt was written. A test checks that system code never mentions
-  test-split places or questions.
+  `golden-test-v1`) before any agent prompt was written. A test checks that the system code and scripts never
+  mention test-split places, questions or dates.
+- **Tuned on dev only:** a prompt change is kept only if it raises pass rates on dev and synthetic cases
+  (`scripts/probe_models.py`, repeated runs on both local models) and lowers none. The numbers are in
+  [docs/decisions.md](docs/decisions.md).
 - **Scoring:** each turn is scored on:
   - the route;
   - tool order;
@@ -61,20 +64,30 @@ The details are in [docs/evaluation.md](docs/evaluation.md), and the design deci
 
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/) and make; the MCP Inspector also needs Node.
+Requires [uv](https://docs.astral.sh/uv/) and make; the MCP Inspector also needs Node, and the agents need
+[Ollama](https://ollama.com) with the model in `EO_LLM_MODEL` pulled.
 
 ```bash
 make setup        # .venv from uv.lock (uv's own Python 3.13) and the git hooks
 make check        # lint, format check, mypy --strict, tests with coverage (no network, no models)
 make serve-mcp    # the catalogue MCP server on http://127.0.0.1:8001/mcp
 make inspector    # in a second terminal: try the tools by hand in the MCP Inspector
+make serve-agent  # in a second terminal: the retrieval agent over A2A on http://127.0.0.1:8002
+uv run eo-agent chat   # in a third terminal: talk to the assistant (both servers and Ollama running)
+uv run python -m agentic_earth_observation.retrieval_agent "<a question>"   # one question, through MCP
 uv run python -m agentic_earth_observation.evals.golden   # validate the golden set and print its hash
 ```
+
+In the chat, each line continues the conversation: a follow-up such as "and the week after that?" continues
+the last search, and an answer to the assistant's own question (which place? which dates? did you mean …?)
+completes the request it asked about.
 
 Any MCP client can use the running server. For example, to add it to Claude Code:
 `claude mcp add --transport http eo-catalog http://127.0.0.1:8001/mcp`.
 
-`.env.example` lists the settings the agents will read (model provider, model, keys); they are not used yet.
+`.env.example` lists every setting with its default. The MCP server reads the catalogue, timeout and tool-log
+settings; the retrieval agent reads the model and timeout settings as well; the chat reads the model, the
+retrieval agent's address and the A2A timeout. The Mistral provider is not wired up yet.
 
 ## How this repository is developed
 
@@ -105,7 +118,7 @@ rules and safeguards are committed so they can be reviewed:
 **Milestone 1, a working system and a first evaluation:**
 - [x] Catalogue MCP server, validated and tested against recorded catalogue responses.
 - [x] Golden set and scoring, frozen.
-- [ ] Retrieval agent and orchestrator, connected over A2A.
+- [x] Retrieval agent and orchestrator, connected over A2A.
 - [ ] Evaluation of two local models (Ollama) and two Mistral API models, three runs each, with latency and cost
   per task.
 
