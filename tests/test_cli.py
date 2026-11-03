@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Iterator
 from datetime import date
@@ -16,7 +17,7 @@ from agentic_earth_observation.config import Settings
 from agentic_earth_observation.orchestrator.client import RetrievalAgentError
 from agentic_earth_observation.orchestrator.graph import Orchestrator
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalResult
-from tests.fakes import SCENE, FakeClient, FakeOllama, OllamaStep, ollama_tool_call
+from tests.fakes import NEVER_FINISHES, SCENE, FakeClient, FakeOllama, OllamaStep, ollama_tool_call
 
 pytestmark = pytest.mark.anyio
 
@@ -61,12 +62,13 @@ def typed(*lines: str) -> Callable[[str], str]:
 
 
 async def chat(
-    lines: list[str], decisions: list[OllamaStep], client: FakeClient
+    lines: list[str], decisions: list[OllamaStep], client: FakeClient, *, config: Settings | None = None
 ) -> tuple[list[str], FakeOllama]:
     """Run a chat; return what it printed and the Ollama server it asked."""
     shown: list[str] = []
     ollama_server = FakeOllama(*decisions)
-    await cli.chat(ollama_server.model(), client, settings(), TODAY, ask=typed(*lines), say=shown.append)
+    config = config or settings()
+    await cli.chat(ollama_server.model(), client, config, TODAY, ask=typed(*lines), say=shown.append)
     return shown, ollama_server
 
 
@@ -165,6 +167,14 @@ async def test_the_status_line_shows_a_model_failure_and_infrastructure() -> Non
     status = [line for line in shown if line.startswith("  [")]
     assert " · model failure parse_error: the model answered without a Decision · " in status[0]
     assert " · infrastructure: A2A ConnectError: All connection attempts failed · " in status[1]
+
+
+async def test_the_decision_has_the_deadline_of_the_settings() -> None:
+    config = settings(model_timeout_s=0.1, decision_deadline_s=0.3)
+    async with asyncio.timeout(5):  # without the deadline the turn would never end: fail, do not hang
+        shown, _ = await chat(["Naples radar"], [NEVER_FINISHES], FakeClient(), config=config)
+    status = [line for line in shown if line.startswith("  [")]
+    assert " · infrastructure: the decision ran past its deadline (0.3 s) · " in status[0]
 
 
 def test_the_command_chats_with_the_running_servers_on_the_date_given(

@@ -17,6 +17,7 @@ registered, and an unregistered one comes back silently changed (checked with la
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import date
 from typing import Literal, NotRequired, TypedDict
@@ -99,9 +100,13 @@ def route_after_decide(state: OrchestratorState) -> Literal["delegate", "reply"]
 
 
 def build_graph(
-    model: BaseChatModel, client: RetrievalClient, model_id: str
+    model: BaseChatModel, client: RetrievalClient, model_id: str, *, decision_deadline_s: float
 ) -> StateGraph[OrchestratorState, None, OrchestratorState, OrchestratorState]:
-    """The orchestrator's graph for one turn, to compile with a checkpointer."""
+    """The orchestrator's graph for one turn, to compile with a checkpointer.
+
+    A decision that runs past `decision_deadline_s` is the infrastructure's failure, like a retrieval turn
+    past its deadline: the model server streams, so its own timeout bounds only a silence, not a reply.
+    """
     decider = model.with_structured_output(Decision, method="function_calling", include_raw=True)
 
     async def decide(state: OrchestratorState) -> dict[str, object]:
@@ -117,10 +122,15 @@ def build_graph(
         ]
         started = time.perf_counter()
         usage = Usage(model=model_id, model_calls=1)
+        deadline = asyncio.timeout(decision_deadline_s)
         try:
-            out = await decider.ainvoke(messages)
+            async with deadline:
+                out = await decider.ainvoke(messages)
         except Exception as err:
             spent = usage.model_copy(update={"seconds": time.perf_counter() - started}).model_dump_json()
+            if deadline.expired() and isinstance(err, TimeoutError):
+                reason = f"the decision ran past its deadline ({decision_deadline_s:g} s)"
+                return {"infra_error": reason, "decision_usage": spent}
             if (detail := unreadable_reply(err)) is not None:
                 return {"failure": "parse_error", "failure_detail": detail, "decision_usage": spent}
             if is_infrastructure(err):
@@ -230,9 +240,12 @@ def _retrieval(stored: str | None) -> RetrievalResult | None:
 class Orchestrator:
     """The orchestrator for any number of conversations, each remembered in memory under its own id."""
 
-    def __init__(self, model: BaseChatModel, client: RetrievalClient, model_id: str) -> None:
+    def __init__(
+        self, model: BaseChatModel, client: RetrievalClient, model_id: str, *, decision_deadline_s: float
+    ) -> None:
+        graph = build_graph(model, client, model_id, decision_deadline_s=decision_deadline_s)
         self.graph: CompiledStateGraph[OrchestratorState, None, OrchestratorState, OrchestratorState] = (
-            build_graph(model, client, model_id).compile(checkpointer=InMemorySaver())
+            graph.compile(checkpointer=InMemorySaver())
         )
 
     async def run_turn(self, conversation_id: str, text: str, trace_id: str, today: date) -> TurnOutput:

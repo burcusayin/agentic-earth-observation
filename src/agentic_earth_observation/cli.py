@@ -65,7 +65,9 @@ async def chat(
     say: Callable[[str], None],
 ) -> None:
     """The conversation: `ask` reads a line (raising EOFError at the end), `say` shows a line."""
-    orchestrator = Orchestrator(model, client, settings.llm_model)
+    orchestrator = Orchestrator(
+        model, client, settings.llm_model, decision_deadline_s=settings.decision_deadline_s
+    )
     conversation = f"chat-{uuid4().hex[:8]}"
     say(f"Earth Observation assistant ({settings.llm_model}; today is {today}; agent at {settings.a2a_url}).")
     say('Ask for satellite scenes of a place and a period. "quit" or Ctrl+D ends the chat.')

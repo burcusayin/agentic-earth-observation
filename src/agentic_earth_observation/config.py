@@ -23,11 +23,12 @@ ENV_PREFIX = "EO_"
 
 
 class Settings(BaseSettings):
-    """Every setting with its default. Timeouts are in seconds and must nest, outermost last."""
+    """Every setting with its default. Timeouts are in seconds and must nest, outermost last: a user turn is
+    the decision, then the A2A call, both inside the harness's timeout."""
 
     model_config = SettingsConfigDict(
         env_prefix=ENV_PREFIX,
-        env_file=".env",
+        env_file=ROOT / ".env",  # the servers and the chat may start in different folders: one file for all
         env_ignore_empty=True,  # EO_MISTRAL_API_KEY= means "no key", not an empty key
         dotenv_filtering="match_prefix",  # .env keys without the prefix are ignored ...
         extra="forbid",  # ... and misspelt EO_ keys are refused
@@ -50,11 +51,14 @@ class Settings(BaseSettings):
     stac_timeout_s: float = Field(default=20.0, gt=0)  # one HTTP request to the catalogue
     stac_max_retries: int = Field(default=3, ge=0)
     stac_deadline_s: float = Field(default=90.0, gt=0)  # one tool call, retries included: a hard limit
+    # The longest the model server may stay silent. ChatOllama streams every reply, so this does not bound a
+    # whole call: the decision and the retrieval turn have deadlines of their own.
     model_timeout_s: float = Field(default=120.0, gt=0)
+    decision_deadline_s: float = Field(default=150.0, gt=0)  # the orchestrator's decision, request to reply
     mcp_timeout_s: float = Field(default=120.0, gt=0)
     turn_deadline_s: float = Field(default=240.0, gt=0)
     a2a_timeout_s: float = Field(default=300.0, gt=0)
-    harness_timeout_s: float = Field(default=360.0, gt=0)
+    harness_timeout_s: float = Field(default=480.0, gt=0)  # one user turn: the decision, then the A2A call
     max_model_calls: int = Field(default=6, ge=4)  # resolve, search, one retry, and the final reply at least
     num_predict: int = Field(default=1024, ge=64)  # cap on generated tokens per model call
 
@@ -105,10 +109,19 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"timeouts must nest: {inner} ({inner_s:g} s) must be below {outer} ({outer_s:g} s)"
                 )
-        if self.model_timeout_s >= self.turn_deadline_s:
+        for deadline, deadline_s in (
+            ("retrieval turn", self.turn_deadline_s),
+            ("decision deadline", self.decision_deadline_s),
+        ):
+            if self.model_timeout_s >= deadline_s:
+                raise ValueError(
+                    f"the model server's silence limit ({self.model_timeout_s:g} s) must be below the "
+                    f"{deadline} ({deadline_s:g} s)"
+                )
+        if self.decision_deadline_s + self.a2a_timeout_s >= self.harness_timeout_s:
             raise ValueError(
-                f"one model call ({self.model_timeout_s:g} s) must time out before the retrieval turn "
-                f"({self.turn_deadline_s:g} s)"
+                f"the decision ({self.decision_deadline_s:g} s) and A2A ({self.a2a_timeout_s:g} s) must end "
+                f"before the harness ({self.harness_timeout_s:g} s)"
             )
         return self
 

@@ -3,9 +3,10 @@ LLM), and sample data."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -129,7 +130,12 @@ class OllamaError:
 
 
 CONNECTION_REFUSED = "connection refused"
-OllamaStep = dict[str, Any] | OllamaError | str  # a reply message, an error, or CONNECTION_REFUSED
+# A reply that starts and never ends, as from a model that keeps generating: no silence long enough for the
+# model server's timeout, so only a deadline stops it.
+NEVER_FINISHES = "never finishes"
+OllamaStep = (
+    dict[str, Any] | OllamaError | str
+)  # a reply message, an error, CONNECTION_REFUSED or NEVER_FINISHES
 
 
 def ollama_tool_call(tool: str, /, **args: object) -> dict[str, Any]:
@@ -165,6 +171,8 @@ class FakeOllama:
         step = self.steps.pop(0)
         if step == CONNECTION_REFUSED:
             raise httpx.ConnectError("All connection attempts failed", request=request)
+        if step == NEVER_FINISHES:
+            return httpx.Response(200, content=_never_finishing())
         if isinstance(step, OllamaError) and step.status != MID_STREAM:
             return httpx.Response(step.status, json={"error": step.message})
         if isinstance(step, OllamaError):
@@ -173,6 +181,12 @@ class FakeOllama:
             assert isinstance(step, dict)
             lines = [_chunk(step, done=False), _chunk(ollama_text(""), done=True)]
         return httpx.Response(200, content="".join(json.dumps(line) + "\n" for line in lines).encode())
+
+
+async def _never_finishing() -> AsyncIterator[bytes]:
+    while True:
+        yield (json.dumps(_chunk(ollama_text("Let me"), done=False)) + "\n").encode()
+        await asyncio.sleep(0.05)
 
 
 def _chunk(message: dict[str, Any], *, done: bool) -> dict[str, Any]:

@@ -120,6 +120,8 @@ def test_the_default_timeouts_nest() -> None:
     assert s.stac_timeout_s < s.stac_deadline_s < s.mcp_timeout_s < s.turn_deadline_s
     assert s.turn_deadline_s < s.a2a_timeout_s < s.harness_timeout_s
     assert s.model_timeout_s < s.turn_deadline_s
+    assert s.model_timeout_s < s.decision_deadline_s
+    assert s.decision_deadline_s + s.a2a_timeout_s < s.harness_timeout_s  # a user turn: decision, then A2A
 
 
 @pytest.mark.parametrize(
@@ -129,10 +131,22 @@ def test_the_default_timeouts_nest() -> None:
         ({"stac_deadline_s": 120.0}, "STAC deadline (120 s) must be below MCP (120 s)"),
         ({"mcp_timeout_s": 240.0}, "MCP (240 s) must be below retrieval turn (240 s)"),
         ({"turn_deadline_s": 300.0}, "retrieval turn (300 s) must be below A2A (300 s)"),
-        ({"a2a_timeout_s": 360.0}, "A2A (360 s) must be below harness (360 s)"),
+        ({"a2a_timeout_s": 480.0}, "A2A (480 s) must be below harness (480 s)"),
         (
             {"model_timeout_s": 240.0},
-            "one model call (240 s) must time out before the retrieval turn (240 s)",
+            "the model server's silence limit (240 s) must be below the retrieval turn (240 s)",
+        ),
+        (
+            {"model_timeout_s": 150.0},
+            "the model server's silence limit (150 s) must be below the decision deadline (150 s)",
+        ),
+        (
+            {"a2a_timeout_s": 330.0},
+            "the decision (150 s) and A2A (330 s) must end before the harness (480 s)",
+        ),
+        (
+            {"decision_deadline_s": 180.0},
+            "the decision (180 s) and A2A (300 s) must end before the harness (480 s)",
         ),
     ],
 )
@@ -148,12 +162,19 @@ def test_each_timeout_must_be_below_the_next_one(overrides: dict[str, float], li
         {"stac_deadline_s": 119.9},
         {"mcp_timeout_s": 239.9},
         {"turn_deadline_s": 299.9},
-        {"a2a_timeout_s": 359.9},
-        {"model_timeout_s": 239.9},
+        {"a2a_timeout_s": 329.9},  # below the harness (480 s) less the decision (150 s)
+        {"model_timeout_s": 149.9},
+        {"model_timeout_s": 239.9, "decision_deadline_s": 240.0, "harness_timeout_s": 540.1},
+        {"decision_deadline_s": 179.9},
     ],
 )
 def test_a_timeout_just_below_the_next_one_is_accepted(overrides: dict[str, float]) -> None:
     settings(**overrides)
+
+
+def test_the_env_file_is_the_repositorys_wherever_a_process_starts() -> None:
+    # The MCP server, the retrieval agent and the chat may start in different folders; they read one file.
+    assert Settings.model_config["env_file"] == ROOT / ".env"
 
 
 @pytest.mark.parametrize(

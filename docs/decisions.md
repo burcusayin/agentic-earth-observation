@@ -294,3 +294,16 @@ decision is made or reversed; do not rewrite old entries.
   5 runs on both local models. Every other case gave the same result as in both tuning runs, apart from one
   qwen3.5:9b turn that ran past the 120 s model timeout while the swap was nearly full: an infrastructure
   failure, not the model's.
+- **The orchestrator's decision has a deadline, and the timeouts nest around a whole user turn** (found in the
+  review of PR #3).
+  - ChatOllama streams every reply, so the model timeout (`EO_MODEL_TIMEOUT_S`, 120 s) bounds only how long
+    the model server may stay silent, not a call. "One model call < retrieval turn" (2026-11-02) described a
+    limit the code did not enforce. The retrieval turn was bounded by its own deadline; the decision was not.
+  - The decision now has a deadline (`EO_DECISION_DEADLINE_S`, 150 s). A decision past it is infrastructure
+    ("the decision ran past its deadline"), like a retrieval turn past its deadline.
+  - A user turn is the decision, then the A2A call, so the settings now require decision deadline + A2A <
+    harness, and the harness timeout rises from 360 to 480 s. The silence limit must stay below both
+    deadlines.
+- **`.env` is read from the repository, wherever a process starts.** It was read from the working folder, so a
+  server or the chat started elsewhere would have run on the defaults without a warning, while the tool-call
+  log was already anchored to the repository.

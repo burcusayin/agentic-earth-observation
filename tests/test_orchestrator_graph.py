@@ -6,8 +6,10 @@ errors are the ones that client produces. The retrieval agent is a fake client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from datetime import date
 from typing import Any, cast
 
@@ -35,6 +37,7 @@ from agentic_earth_observation.retrieval_agent.prompts import retrieval_user_mes
 from tests.fakes import (
     CONNECTION_REFUSED,
     MID_STREAM,
+    NEVER_FINISHES,
     SCENE,
     FakeClient,
     FakeOllama,
@@ -77,9 +80,12 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def orchestrator(decisions: list[OllamaStep], client: FakeClient) -> tuple[Orchestrator, FakeOllama]:
+def orchestrator(
+    decisions: list[OllamaStep], client: FakeClient, *, decision_deadline_s: float = 150.0
+) -> tuple[Orchestrator, FakeOllama]:
     ollama_server = FakeOllama(*decisions)
-    return Orchestrator(ollama_server.model(), client, MODEL_ID), ollama_server
+    model = ollama_server.model()
+    return Orchestrator(model, client, MODEL_ID, decision_deadline_s=decision_deadline_s), ollama_server
 
 
 def state(**fields: Any) -> OrchestratorState:  # noqa: ANN401 - the state's fields
@@ -269,6 +275,24 @@ class TestDecisionFailures:
             "declined",
         )
         assert client.calls == []
+
+    async def test_a_decision_past_its_deadline_is_infrastructure(self) -> None:
+        # The reply keeps streaming, so the model server's own timeout (a silence) never fires.
+        client = FakeClient()
+        orch, _ = orchestrator([NEVER_FINISHES], client, decision_deadline_s=0.3)
+        started = time.perf_counter()
+        async with asyncio.timeout(5):  # without the deadline the turn would never end: fail, do not hang
+            out = await orch.run_turn("conv-1", "Something", "turn-1", TODAY)
+        elapsed = time.perf_counter() - started
+        assert (out.infra_error, out.failure, out.route, out.status) == (
+            "the decision ran past its deadline (0.3 s)",
+            None,
+            Route.DECLINE,
+            "declined",
+        )
+        assert 0.3 <= elapsed < 0.3 + 0.5  # enforced, and on time
+        assert (out.decision_usage.model_calls, client.calls) == (1, [])
+        assert 0.3 <= out.decision_usage.seconds <= elapsed
 
     async def test_a_model_the_server_does_not_have_is_raised(self) -> None:
         orch, _ = orchestrator([OllamaError(404, 'model "qwen3.5:9b" not found')], FakeClient())
