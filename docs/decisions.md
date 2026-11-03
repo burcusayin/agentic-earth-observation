@@ -264,3 +264,25 @@ decision is made or reversed; do not rewrite old entries.
   about 80 s to process about 100 new prompt tokens while the swap was almost full (24.9 of 25.6 GB). Evaluation
   runs start with memory to spare, and their records keep Ollama's own timings, so a slow turn can be told
   apart from a slow model.
+- **Both prompts were tuned on the dev split by pass rates** (`scripts/probe_models.py --repeat 5`). The probe's
+  8 retrieval and 16 decision cases are dev questions and synthetic ones about dev or invented places, each
+  checked automatically. A change was kept only if it raised a case's pass rate on a local model and lowered
+  none. It was measured twice, with the repeats back to back and then in five shuffled rounds, and the two runs
+  agreed case by case.
+  - **Retrieval: the rule for answers moved out of the search steps** into its own paragraph after the argument
+    rules. ministral-3:8b went from 25 to 35 of 40 runs: the dev radar question and the before-launch question
+    went from 0 to 5 of 5. With the rule among the steps, it answered after `resolve_place` without searching,
+    as on 2026-11-02. qwen3.5:9b stayed at 40 of 40.
+  - **Decision: the rules became numbered steps, and the first that applies wins,** with a period defined and
+    "a place name on its own has no period". qwen3.5:9b went from 70 to 80 of 80 runs, ministral-3:8b from 60
+    to 70: both now ask for the period of a place named without one.
+  - **Still failing on ministral-3:8b, with either prompt:** the dev German question is not delegated (the old
+    prompt asked for its period, the new one declines it); a place given in answer to "which place?" is
+    delegated without a period; and an accepted suggestion is looked up again under the misspelt name.
+- **At temperature 0 with a fixed seed, a run repeats itself mostly, not always.** In the two tuning runs, every
+  probe case gave the same result in all 10 of its runs, whether repeated back to back or in shuffled rounds.
+  But an earlier comparison the same day, with the same messages, answered the dev radar question differently
+  in two runs within one model load, and passed the before-launch question that failed all 10 runs here. The
+  cause is not known. So the retry rule of 2026-11-02 holds with a caveat: a retried task may not repeat the
+  first attempt exactly. The evaluation runs each task three times, which shows whether this matters for the
+  scores.

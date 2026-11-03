@@ -140,9 +140,17 @@ def test_the_prompt_says_how_to_read_an_answer() -> None:
     prompt = " ".join(
         retrieval_system_prompt(date(2025, 12, 15)).split()
     )  # as one line, whatever the wrapping
-    assert (
-        "When THE USER ANSWERED such a question by accepting a suggestion, that suggestion is the place"
-        in prompt
-    )
     assert "handle the REQUEST as completed or corrected by THE USER ANSWERED" in prompt
+    assert "a suggested place that the user accepts is the place as the user wrote it" in prompt
     assert "If the answer is a new request on its own, handle the answer alone." in prompt
+
+
+def test_the_answer_rule_comes_after_the_search_steps() -> None:
+    # With it among the search steps, ministral-3:8b answered two new questions about Naples straight after
+    # resolve_place, without searching (decision of 2026-11-03).
+    prompt = " ".join(
+        retrieval_system_prompt(date(2025, 12, 15)).split()
+    )  # as one line, whatever the wrapping
+    answers = prompt.index("Answers to a question:")
+    assert answers > prompt.index("Rules for the arguments:")
+    assert "THE USER ANSWERED" not in prompt[:answers]

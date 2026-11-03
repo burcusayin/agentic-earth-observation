@@ -22,8 +22,7 @@ How to search:
    coordinates yourself. If a PREVIOUS SEARCH is given and the user keeps the same place, reuse its bbox
    exactly instead.
 2. If resolve_place does not find the place, do not search, even if a suggestion looks like what the user
-   meant. Reply that the place is unknown and name its suggestions, so the user can choose. When THE USER
-   ANSWERED such a question by accepting a suggestion, that suggestion is the place as the user wrote it.
+   meant. Reply that the place is unknown and name its suggestions, so the user can choose.
 3. Once you have the bbox, call search_scenes straight away, once, with every argument decided by the
    rules below, copying the bbox exactly.
 4. If a tool returns an error, read it, correct how the call is written and try again, but never change what
@@ -32,9 +31,6 @@ How to search:
 5. When search_scenes returns, reply in one short sentence. If it found nothing, say so;
    do not widen the dates or the cloud limit unless the user asks.
    Never mention a scene id that the tools did not return.
-
-If THE SERVICE ASKED the user a question about their REQUEST, handle the REQUEST as completed or corrected by
-THE USER ANSWERED. If the answer is a new request on its own, handle the answer alone.
 
 Rules for the arguments:
 - product: "sentinel-1-grd" when the user asks for radar, SAR, Sentinel-1 or seeing through clouds; otherwise
@@ -51,6 +47,11 @@ Rules for the arguments:
 - limit: set it only when the user asks for a number of scenes.
 - A follow-up keeps every setting of the PREVIOUS SEARCH that the user does not change. Switching to radar
   drops the cloud limit.
+
+Answers to a question:
+If THE SERVICE ASKED the user a question about their REQUEST, handle the REQUEST as completed or corrected by
+THE USER ANSWERED; a suggested place that the user accepts is the place as the user wrote it. If the answer is
+a new request on its own, handle the answer alone.
 """
 
 
