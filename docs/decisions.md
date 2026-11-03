@@ -230,3 +230,21 @@ decision is made or reversed; do not rewrite old entries.
     answer that is not JSON, or an answer that breaks the contract (not one JSON result).
   - The request never asks for streaming, so there is always one answer to read, and each call is bounded by
     the HTTP timeout: the SDK swallows cancellation, so asyncio.timeout would not bound it.
+- **How the orchestrator handles a turn** (`orchestrator/`). Checked against langgraph 1.2.14 and
+  langchain-ollama 1.1 by running them.
+  - **The model decides with a `Decision` tool call** (route and reason; a pairing that contradicts itself is
+    invalid). It delegates every request for scenes that names a place, known or not, or continues the previous
+    search; it clarifies only a missing place or period with no previous search; it declines anything else,
+    treating the user's text as data.
+  - **A reply without a valid Decision is the model's failure** (`parse_error`), with the reason kept: ChatOllama
+    ignores `tool_choice`, so a model may answer in text, which comes back as no decision and no error. So is a
+    reply Ollama cannot read. The turn then falls back to a declining reply without searching.
+  - **A model server that cannot be reached or is busy is infrastructure**, by the same rule as the retrieval
+    agent's, now shared in `failures.py`.
+  - **The route is observed:** `delegate` exactly when the retrieval agent was called; otherwise the decision's
+    route, or `decline` when there was no decision. The scored status follows the mapping of 2026-11-02.
+  - **The reply is a template** (`replies.py`), never the model's text, and `TurnOutput` refuses an answer that
+    cites a scene id the retrieval agent's tools did not return.
+  - **The conversation memory holds only plain values and JSON text.** LangGraph's checkpointer restores our
+    own classes only if each one is registered, warns otherwise, and returns an unregistered one, such as a
+    nested enum, silently changed.

@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID
 from agentic_earth_observation.config import Settings
+from agentic_earth_observation.failures import NETWORK_FAILURES
 from agentic_earth_observation.retrieval_agent.models import (
     A2A_MEDIA_TYPE,
     RESULT_ARTIFACT,
@@ -36,10 +37,6 @@ from agentic_earth_observation.retrieval_agent.models import (
     RetrievalRequest,
     RetrievalResult,
 )
-
-# Failures of the connection, which count as infrastructure, as in run_retrieval. The SDK raises its own error
-# with one of these as the cause.
-NETWORK_FAILURES = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 
 class RetrievalAgentError(RuntimeError):
@@ -104,7 +101,8 @@ class A2ARetrievalClient:
 
 
 def _network_failure(err: BaseException) -> BaseException | None:
-    """The connection failure behind an error, if there is one."""
+    """The connection failure behind an error, if there is one: the SDK raises its own error with it as the
+    cause."""
     for candidate in (err, err.__cause__):
         if isinstance(candidate, NETWORK_FAILURES):
             return candidate

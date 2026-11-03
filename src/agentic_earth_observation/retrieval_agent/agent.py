@@ -27,7 +27,6 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-import httpx
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolCall, ToolMessage
@@ -40,14 +39,13 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from mcp.shared._httpx_utils import McpHttpClientFactory
-from mcp.shared.exceptions import McpError
-from mcp.types import CONNECTION_CLOSED
 
 from agentic_earth_observation.catalog.stac import SceneSummary
 from agentic_earth_observation.catalog_mcp.server import PlaceResult, SearchResult
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_HEADER, TRACE_ID
 from agentic_earth_observation.config import Settings
-from agentic_earth_observation.llm import model_server_busy, unreadable_reply
+from agentic_earth_observation.failures import describe, is_infrastructure, leaves
+from agentic_earth_observation.llm import unreadable_reply
 from agentic_earth_observation.retrieval_agent.models import (
     ModelFailure,
     PreviousSearch,
@@ -58,8 +56,6 @@ from agentic_earth_observation.retrieval_agent.models import (
 from agentic_earth_observation.retrieval_agent.prompts import retrieval_system_prompt, retrieval_user_message
 
 AGENT_TOOLS = ("list_products", "resolve_place", "search_scenes")  # not get_scene: decision of 2026-10-31
-# The MCP client's error code when a request gets no answer in time.
-MCP_TIMED_OUT = httpx.codes.REQUEST_TIMEOUT
 SAME_BOX = 0.001  # degrees: a box copied to 3 decimals is still the box a tool returned
 
 
@@ -218,48 +214,20 @@ async def _run_turn(
         return await graph.ainvoke(first, config)
 
 
-def _is_infrastructure(err: BaseException) -> bool:
-    """Whether an error is a failure outside the model's control and outside our code.
-
-    That is a timeout or our deadline, a connection that fails or a reply cut short, the MCP client giving up
-    waiting or losing its connection, and a busy model server. An HTTP error from our own MCP server, a wrong
-    MCP URL (which the client reports as "Session terminated") or a model the model server does not have is a
-    bug or a configuration error.
-    """
-    network = httpx.TimeoutException | httpx.NetworkError | httpx.RemoteProtocolError
-    if isinstance(err, TimeoutError | ConnectionError | network):
-        return True
-    if isinstance(err, McpError):
-        return err.error.code in (MCP_TIMED_OUT, CONNECTION_CLOSED)
-    return model_server_busy(err)
-
-
 def _infrastructure_error(err: Exception) -> str:
     """Describe a failure of the infrastructure, or re-raise the error if it is not one.
 
     The MCP client runs in task groups, so errors may arrive wrapped in nested exception groups. A single bug
     inside them is re-raised as itself, with its own cause, so that its message is the one reported.
     """
-    leaves = _leaves(err)
-    bugs = [e for e in leaves if not _is_infrastructure(e)]
+    inside = leaves(err)
+    bugs = [e for e in inside if not is_infrastructure(e)]
     if len(bugs) == 1 and isinstance(err, BaseExceptionGroup):
         bugs[0].__suppress_context__ = True  # the exception groups around it add nothing
         raise bugs[0]
     if bugs:
         raise err
-    return _describe(leaves[0])
-
-
-def _leaves(err: BaseException) -> list[BaseException]:
-    if isinstance(err, BaseExceptionGroup):
-        return [leaf for inner in err.exceptions for leaf in _leaves(inner)]
-    return [err]
-
-
-def _describe(err: BaseException) -> str:
-    """The error's type and message on one line, for a result; some errors have no message."""
-    message = " ".join(str(err).split())
-    return f"{type(err).__name__}: {message}"[:300] if message else type(err).__name__
+    return describe(inside[0])
 
 
 class _UsageCounter(AsyncCallbackHandler):
