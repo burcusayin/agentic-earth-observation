@@ -307,3 +307,8 @@ decision is made or reversed; do not rewrite old entries.
 - **`.env` is read from the repository, wherever a process starts.** It was read from the working folder, so a
   server or the chat started elsewhere would have run on the defaults without a warning, while the tool-call
   log was already anchored to the repository.
+- **The STAC client honours Retry-After again, up to 10 s** (review of PR #3). On 2026-11-02 it ignored the
+  header, so that a 429 asking for an hour could not block a worker. But then a rate-limited request was
+  retried after 0, 1 and 2 s, whatever pause the public service had asked for. urllib3's own cap
+  (`retry_after_max`, kept on every retry) now limits the pause to 10 s. Without the header the backoff is
+  unchanged, and the 90 s STAC deadline still bounds the whole call.

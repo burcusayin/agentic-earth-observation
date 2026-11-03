@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 EARTH_SEARCH_URL = "https://earth-search.aws.element84.com/v1"
 USER_AGENT = "agentic-earth-observation/0.1 (+https://github.com/burcusayin/agentic-earth-observation)"
+RETRY_AFTER_MAX_S = 10  # the longest pause a Retry-After header gets before the next try
 
 # Product names used by the tools, mapped to Earth Search collection ids. Every product must be listed: a
 # missing entry is a bug, never a reason to pass the product name through to the catalogue.
@@ -80,8 +81,10 @@ class SceneSummary(BaseModel):
 def retry_policy(max_retries: int) -> Retry:
     """How failed catalogue requests are retried: on rate limits and server errors, with a short backoff.
 
-    Searches are read-only, so retrying a POST is safe. A server's Retry-After header is ignored: urllib3
-    would otherwise wait as long as the server asks (hours), far past every timeout in Settings.
+    Searches are read-only, so retrying a POST is safe. A server's Retry-After header is honoured, so a public
+    service that asks for a pause gets one, but only up to RETRY_AFTER_MAX_S: urllib3 would otherwise wait as
+    long as the server asks (hours), far past every timeout in Settings. The STAC deadline still bounds the
+    whole call.
     """
     return Retry(
         total=max_retries,
@@ -89,7 +92,8 @@ def retry_policy(max_retries: int) -> Retry:
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=None,
         raise_on_status=False,
-        respect_retry_after_header=False,
+        respect_retry_after_header=True,
+        retry_after_max=RETRY_AFTER_MAX_S,
     )
 
 

@@ -10,6 +10,7 @@ import pytest
 from pystac_client import Client
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
+from urllib3 import HTTPResponse
 
 from agentic_earth_observation.catalog.stac import (
     EARTH_SEARCH_COLLECTIONS,
@@ -183,12 +184,24 @@ def feature_collection(*items: dict[str, Any]) -> str:
 
 
 class TestNetworkBehaviour:
-    def test_retries_back_off_briefly_and_ignore_retry_after(self) -> None:
+    def test_retries_back_off_briefly(self) -> None:
         retry = retry_policy(3)
         assert retry.total == 3
-        assert retry.respect_retry_after_header is False  # a 429 asking for an hour must not block a worker
         assert set(retry.status_forcelist or ()) == {429, 500, 502, 503, 504}
         assert retry.backoff_factor == 0.5
+
+    @pytest.mark.parametrize(("asked", "paused"), [("3", 3), ("3600", 10)])
+    def test_a_rate_limit_pauses_as_asked_up_to_a_cap(
+        self, monkeypatch: pytest.MonkeyPatch, asked: str, paused: float
+    ) -> None:
+        # A public service that asks for a pause gets one; a 429 asking for an hour must not block a worker.
+        pauses: list[float] = []
+        monkeypatch.setattr("urllib3.util.retry.time.sleep", pauses.append)
+        response = HTTPResponse(status=429, headers={"Retry-After": asked})
+        retry = retry_policy(3)
+        assert retry.is_retry("POST", 429, has_retry_after=True)
+        retry.increment(method="POST", url="/search", response=response).sleep(response)  # urllib3's next try
+        assert pauses == [paused]
 
     def test_the_timeout_survives_opening_the_catalogue(self, monkeypatch: pytest.MonkeyPatch) -> None:
         timeouts = fake_network(monkeypatch, search=feature_collection(raw_item()))
