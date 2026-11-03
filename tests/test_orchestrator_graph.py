@@ -20,6 +20,7 @@ from agentic_earth_observation.orchestrator.graph import (
     REQUEST_LIMIT,
     Orchestrator,
     OrchestratorState,
+    TurnRefused,
     next_pending,
     route_after_decide,
 )
@@ -326,7 +327,7 @@ class TestBoundary:
     ) -> None:
         client = FakeClient()
         orch, ollama_server = orchestrator([DELEGATE], client)
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises(TurnRefused, match=message):
             await orch.run_turn(conversation, text, trace, TODAY)
         assert (ollama_server.requests, client.calls) == ([], [])
 

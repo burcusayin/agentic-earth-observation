@@ -27,7 +27,7 @@ from agentic_earth_observation.orchestrator.client import (
     RetrievalAgentError,
     RetrievalClient,
 )
-from agentic_earth_observation.orchestrator.graph import Orchestrator
+from agentic_earth_observation.orchestrator.graph import Orchestrator, TurnRefused
 from agentic_earth_observation.orchestrator.models import TurnOutput
 
 QUIT = {"quit", "exit"}
@@ -85,7 +85,7 @@ async def chat(
         started = time.perf_counter()
         try:
             out = await orchestrator.run_turn(conversation, text, trace_id, today)
-        except ValueError as err:  # a line the assistant cannot take, such as one far too long
+        except TurnRefused as err:  # a line the assistant cannot take, such as one far too long
             say(f"  ({err})")
             continue
         except RetrievalAgentError as err:  # a bug in the retrieval agent: shown, and its log has the details

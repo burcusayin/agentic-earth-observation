@@ -55,6 +55,12 @@ from agentic_earth_observation.retrieval_agent.prompts import retrieval_user_mes
 REQUEST_LIMIT = 4000  # the longest request so far that an open question carries (Clarification.request)
 
 
+class TurnRefused(ValueError):
+    """A turn that run_turn will not take, before anything runs: invalid ids, or text the retrieval agent
+    would refuse. Any other error from run_turn is a bug, even a ValueError (pydantic's ValidationError is
+    one)."""
+
+
 class OrchestratorState(TypedDict):
     """One conversation's state. The previous search and the open question are kept from turn to turn;
     run_turn resets the rest."""
@@ -233,14 +239,15 @@ class Orchestrator:
         """Handle one user turn of a conversation and report what it did.
 
         `trace_id` files the retrieval agent's tool calls under this turn; `today` is the date the agents take
-        as today. A bug, or an error of the retrieval agent (RetrievalAgentError), is raised.
+        as today. A turn it will not take raises TurnRefused before anything runs. A bug, or an error of the
+        retrieval agent (RetrievalAgentError), is raised.
         """
         if not TRACE_ID.fullmatch(trace_id) or not TRACE_ID.fullmatch(conversation_id):
-            raise ValueError("ids are 1 to 64 letters, digits, '.', '_' or '-'")
+            raise TurnRefused("ids are 1 to 64 letters, digits, '.', '_' or '-'")
         try:
             RetrievalRequest(text=text, today=today)  # the text must be one the retrieval agent accepts
         except ValidationError as err:
-            raise ValueError(f"the text cannot be sent: {err.errors()[0]['msg']}") from None
+            raise TurnRefused(f"the text cannot be sent: {err.errors()[0]['msg']}") from None
         start: OrchestratorState = {
             "text": text,
             "today": today,

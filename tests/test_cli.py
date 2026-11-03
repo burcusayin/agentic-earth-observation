@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from agentic_earth_observation import cli
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.orchestrator.client import RetrievalAgentError
+from agentic_earth_observation.orchestrator.graph import Orchestrator
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalResult
 from tests.fakes import SCENE, FakeClient, FakeOllama, OllamaStep, ollama_tool_call
 
@@ -115,6 +117,33 @@ async def test_a_line_that_cannot_be_sent_is_explained_and_the_chat_goes_on() ->
     shown, _ = await chat(["x" * 2001, "What will the weather be like?"], [DECLINE], FakeClient())
     assert "  (the text cannot be sent: String should have at most 2000 characters)" in shown
     assert any(line.startswith("  [route decline") for line in shown)
+
+
+def a_plain_value_error() -> None:
+    raise ValueError("a bug inside the turn")
+
+
+def an_invalid_result() -> None:
+    RetrievalResult.model_validate({"status": "nonsense"})  # pydantic's ValidationError, a ValueError too
+
+
+@pytest.mark.parametrize(
+    ("bug", "raised", "message"),
+    [
+        (a_plain_value_error, ValueError, "a bug inside the turn"),
+        (an_invalid_result, ValidationError, "status"),
+    ],
+)
+async def test_a_bug_inside_a_turn_is_not_taken_for_a_refused_line(
+    monkeypatch: pytest.MonkeyPatch, bug: Callable[[], None], raised: type[ValueError], message: str
+) -> None:
+    # Both are ValueErrors, like a refused line, but they come from inside the turn: a bug, never hidden.
+    async def failing_turn(*args: object) -> None:
+        bug()
+
+    monkeypatch.setattr(Orchestrator, "run_turn", failing_turn)
+    with pytest.raises(raised, match=message):
+        await chat(["Naples radar"], [], FakeClient())
 
 
 async def test_an_error_of_the_retrieval_agent_is_shown_and_the_chat_goes_on() -> None:
