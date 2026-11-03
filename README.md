@@ -75,6 +75,10 @@ uv run python -m agentic_earth_observation.retrieval_agent "<a question>"   # on
 uv run python -m agentic_earth_observation.evals.golden   # validate the golden set and print its hash
 ```
 
+In the chat, each line continues the conversation: a follow-up such as "and the week after that?" continues
+the last search, and an answer to the assistant's own question (which place? which dates? did you mean …?)
+completes the request it asked about.
+
 Any MCP client can use the running server. For example, to add it to Claude Code:
 `claude mcp add --transport http eo-catalog http://127.0.0.1:8001/mcp`.
 

@@ -58,13 +58,24 @@ class PreviousSearch(BaseModel):
         return self
 
 
+class Clarification(BaseModel):
+    """A question the service asked about the user's request, which this turn's text answers."""
+
+    model_config = A2A_CONFIG
+    request: str = Field(min_length=1, max_length=4000)  # the user's words so far, earlier answers included
+    # The service's reply that asked the question; it may list up to 10 suggested places of 200 characters.
+    asked: str = Field(min_length=1, max_length=3000)
+
+
 class RetrievalRequest(BaseModel):
-    """One delegated turn: the user's own words, today's date, and the search it continues, if any."""
+    """One delegated turn: the user's own words, today's date, the search it continues and the question it
+    answers, if any."""
 
     model_config = A2A_CONFIG
     text: str = Field(min_length=1, max_length=2000)
     today: date
     previous_search: PreviousSearch | None = None
+    clarifies: Clarification | None = None
 
 
 class Usage(BaseModel):

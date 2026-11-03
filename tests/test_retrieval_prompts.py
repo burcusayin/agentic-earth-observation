@@ -8,7 +8,7 @@ from pathlib import Path
 
 from agentic_earth_observation.domain import Product
 from agentic_earth_observation.retrieval_agent import prompts
-from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest
+from agentic_earth_observation.retrieval_agent.models import Clarification, PreviousSearch, RetrievalRequest
 from agentic_earth_observation.retrieval_agent.prompts import (
     prompt_hash,
     retrieval_system_prompt,
@@ -107,3 +107,42 @@ def test_a_follow_up_leaves_out_a_place_that_no_tool_named() -> None:
 def test_the_prompt_hash_covers_the_whole_module() -> None:
     # The request format (REQUEST:, PREVIOUS SEARCH:) reaches the model too, not only the system prompt.
     assert prompt_hash() == hashlib.sha256(Path(prompts.__file__).read_bytes()).hexdigest()
+
+
+MILAM = Clarification(
+    request="Radar scenes of Milam in March 2025", asked="I don't know that place. Did you mean Milan?"
+)
+
+
+def test_an_answer_carries_the_request_and_the_question_it_answers() -> None:
+    request = RetrievalRequest(text="Yes", today=date(2025, 12, 15), clarifies=MILAM)
+    assert retrieval_user_message(request) == (
+        "REQUEST: Radar scenes of Milam in March 2025\n"
+        "THE SERVICE ASKED: I don't know that place. Did you mean Milan?\n"
+        "THE USER ANSWERED: Yes"
+    )
+
+
+def test_an_answer_in_a_follow_up_carries_the_previous_search_last() -> None:
+    request = RetrievalRequest(
+        text="Yes", today=date(2025, 12, 15), clarifies=MILAM, previous_search=naples_week()
+    )
+    lines = retrieval_user_message(request).splitlines()
+    assert [line.split(":")[0] for line in lines] == [
+        "REQUEST",
+        "THE SERVICE ASKED",
+        "THE USER ANSWERED",
+        "PREVIOUS SEARCH",
+    ]
+
+
+def test_the_prompt_says_how_to_read_an_answer() -> None:
+    prompt = " ".join(
+        retrieval_system_prompt(date(2025, 12, 15)).split()
+    )  # as one line, whatever the wrapping
+    assert (
+        "When THE USER ANSWERED such a question by accepting a suggestion, that suggestion is the place"
+        in prompt
+    )
+    assert "handle the REQUEST as completed or corrected by THE USER ANSWERED" in prompt
+    assert "If the answer is a new request on its own, handle the answer alone." in prompt

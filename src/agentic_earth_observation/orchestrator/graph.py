@@ -9,8 +9,9 @@
 - delegate: sends the user's words, today's date and the previous search to the retrieval agent over A2A.
 - reply: a template (replies.py), never the model's text.
 
-Memory: a checkpointer keeps each conversation's previous search, so a follow-up can continue it. The state
-holds only plain values and JSON text: the checkpointer brings back our own classes only if each one is
+Memory: a checkpointer keeps each conversation's previous search, so a follow-up can continue it, and the
+question the last turn asked, so the next turn can answer it (next_pending). The state holds only plain values
+and JSON text: the checkpointer brings back our own classes only if each one is
 registered, and an unregistered one comes back silently changed (checked with langgraph 1.2.14).
 """
 
@@ -42,6 +43,7 @@ from agentic_earth_observation.orchestrator.models import (
 from agentic_earth_observation.orchestrator.prompts import decide_system_prompt
 from agentic_earth_observation.orchestrator.replies import compose_reply
 from agentic_earth_observation.retrieval_agent.models import (
+    Clarification,
     ModelFailure,
     PreviousSearch,
     RetrievalRequest,
@@ -50,11 +52,15 @@ from agentic_earth_observation.retrieval_agent.models import (
 )
 from agentic_earth_observation.retrieval_agent.prompts import retrieval_user_message
 
+REQUEST_LIMIT = 4000  # the longest request so far that an open question carries (Clarification.request)
+
 
 class OrchestratorState(TypedDict):
-    """One conversation's state. The previous search is kept from turn to turn; run_turn resets the rest."""
+    """One conversation's state. The previous search and the open question are kept from turn to turn;
+    run_turn resets the rest."""
 
     previous_search: NotRequired[str | None]  # the last successful search, as JSON (a PreviousSearch)
+    pending: NotRequired[str | None]  # the question still open, as JSON (a Clarification)
     text: str  # the user's words
     today: date
     trace_id: str
@@ -93,7 +99,12 @@ def build_graph(
     decider = model.with_structured_output(Decision, method="function_calling", include_raw=True)
 
     async def decide(state: OrchestratorState) -> dict[str, object]:
-        request = RetrievalRequest(text=state["text"], today=state["today"], previous_search=_previous(state))
+        request = RetrievalRequest(
+            text=state["text"],
+            today=state["today"],
+            previous_search=_previous(state),
+            clarifies=_pending(state),
+        )
         messages = [
             SystemMessage(decide_system_prompt(state["today"])),
             HumanMessage(retrieval_user_message(request)),
@@ -129,7 +140,12 @@ def build_graph(
         return {"route": decision.route, "reason": decision.reason, "decision_usage": spent}
 
     async def delegate(state: OrchestratorState) -> dict[str, object]:
-        request = RetrievalRequest(text=state["text"], today=state["today"], previous_search=_previous(state))
+        request = RetrievalRequest(
+            text=state["text"],
+            today=state["today"],
+            previous_search=_previous(state),
+            clarifies=_pending(state),
+        )
         result = await client.retrieve(request, state["trace_id"])  # RetrievalAgentError: a bug, raised
         update: dict[str, object] = {
             "retrieval": result.model_dump_json(),
@@ -142,14 +158,22 @@ def build_graph(
         return update
 
     def reply(state: OrchestratorState) -> dict[str, object]:
+        retrieval = _retrieval(state["retrieval"])
         text, cited_ids = compose_reply(
-            state["route"],
-            state["reason"],
-            _retrieval(state["retrieval"]),
-            state["failure"],
-            state["infra_error"],
+            state["route"], state["reason"], retrieval, state["failure"], state["infra_error"]
         )
-        return {"reply": text, "cited_ids": cited_ids}
+        pending = next_pending(
+            _pending(state),
+            state["text"],
+            text,
+            asked=scored_status(state["route"], retrieval) == "clarified",
+            failed=state["failure"] is not None or state["infra_error"] is not None,
+        )
+        return {
+            "reply": text,
+            "cited_ids": cited_ids,
+            "pending": None if pending is None else pending.model_dump_json(),
+        }
 
     graph = StateGraph(OrchestratorState)
     graph.add_node("decide", decide)
@@ -165,6 +189,32 @@ def build_graph(
 def _previous(state: OrchestratorState) -> PreviousSearch | None:
     stored = state.get("previous_search")
     return None if stored is None else PreviousSearch.model_validate_json(stored)
+
+
+def _pending(state: OrchestratorState) -> Clarification | None:
+    stored = state.get("pending")
+    return None if stored is None else Clarification.model_validate_json(stored)
+
+
+def next_pending(
+    pending: Clarification | None, text: str, reply: str, *, asked: bool, failed: bool
+) -> Clarification | None:
+    """The question still open after a turn, which the next turn may answer.
+
+    - The turn failed (the model, or the infrastructure): nothing was settled, so the open question stays.
+    - The turn asked the user something (a clarification, or a place it does not know): its reply is the
+      question, about the request so far. When the turn answered an earlier question, the request so far is
+      the earlier one with this turn's words added; if that grows too long, it starts again from this turn.
+    - Otherwise the question is settled: none is open.
+    """
+    if failed:
+        return pending
+    if not asked:
+        return None
+    request = text if pending is None else f"{pending.request} / {text}"
+    if len(request) > REQUEST_LIMIT:
+        request = text
+    return Clarification(request=request, asked=reply)
 
 
 def _retrieval(stored: str | None) -> RetrievalResult | None:

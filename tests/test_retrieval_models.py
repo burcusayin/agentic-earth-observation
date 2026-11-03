@@ -15,7 +15,12 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_earth_observation.domain import Product
-from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest, RetrievalResult
+from agentic_earth_observation.retrieval_agent.models import (
+    Clarification,
+    PreviousSearch,
+    RetrievalRequest,
+    RetrievalResult,
+)
 from tests.fakes import SCENE
 
 NAPLES_WEEK: dict[str, Any] = {
@@ -119,6 +124,29 @@ class TestPreviousSearch:
 
 
 class TestRetrievalRequest:
+    def test_an_answer_survives_the_trip_through_json_with_the_question_it_answers(self) -> None:
+        asked = Clarification(
+            request="  Sentinel-2 scenes of Milan ", asked="For which dates should I search?"
+        )
+        request = RetrievalRequest(text="March 2025", today=date(2025, 12, 15), clarifies=asked)
+        assert RetrievalRequest.model_validate_json(request.model_dump_json()) == request
+        assert asked.request == "Sentinel-2 scenes of Milan"  # stripped
+
+    @pytest.mark.parametrize(
+        "clarifies",
+        [
+            {"request": "", "asked": "Which place?"},
+            {"request": "x" * 4001, "asked": "Which place?"},
+            {"request": "Sentinel-2 scenes", "asked": ""},
+            {"request": "Sentinel-2 scenes", "asked": "x" * 3001},
+            {"request": "Sentinel-2 scenes", "asked": "Which place?", "answer": "Milan"},  # unknown field
+        ],
+    )
+    def test_a_malformed_question_is_refused(self, clarifies: dict[str, object]) -> None:
+        payload = {"text": "Milan", "today": "2025-12-15", "clarifies": clarifies}
+        with pytest.raises(ValidationError):
+            RetrievalRequest.model_validate_json(json.dumps(payload))
+
     def test_the_text_is_stripped(self) -> None:
         request = RetrievalRequest.model_validate_json(
             '{"text": "  Radar over Naples\\n", "today": "2025-12-15"}'

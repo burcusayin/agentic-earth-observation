@@ -248,3 +248,19 @@ decision is made or reversed; do not rewrite old entries.
   - **The conversation memory holds only plain values and JSON text.** LangGraph's checkpointer restores our
     own classes only if each one is registered, warns otherwise, and returns an unregistered one, such as a
     nested enum, silently changed.
+- **The assistant can take an answer to its own question** (her request, which goes beyond Milestone 1's plan).
+  Found in the first end-to-end chat: each turn was decided alone, so "Yes" or a place name given in answer
+  meant nothing.
+  - The orchestrator remembers the question its last turn asked (a clarification, or an unknown place with
+    its suggestions) together with the request so far. The next turn reaches both models as REQUEST, THE
+    SERVICE ASKED and THE USER ANSWERED, and each prompt says how to read it: a request completed or corrected
+    by the answer, with an accepted suggestion as the place the user wrote, unless the answer is a new request.
+  - A turn that searches or declines settles the question; a failed turn (the model's or the infrastructure's)
+    leaves it open; answers to repeated questions add up, to at most 4,000 characters.
+  - Without an open question nothing changes. The frozen evaluation does not score answers to questions.
+  - Designed and probed on dev places and invented ones only: the chat that found the gap used a place outside
+    the dev split, so that transcript is not used for tuning.
+- **The slow turns in the first end-to-end chat came from the machine, not the code.** After pauses, Ollama took
+  about 80 s to process about 100 new prompt tokens while the swap was almost full (24.9 of 25.6 GB). Evaluation
+  runs start with memory to spare, and their records keep Ollama's own timings, so a slow turn can be told
+  apart from a slow model.

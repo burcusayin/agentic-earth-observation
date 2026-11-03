@@ -33,7 +33,12 @@ from agentic_earth_observation.orchestrator.client import (
 )
 from agentic_earth_observation.retrieval_agent import a2a_server
 from agentic_earth_observation.retrieval_agent.a2a_server import RetrievalExecutor, build_app
-from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest, RetrievalResult
+from agentic_earth_observation.retrieval_agent.models import (
+    Clarification,
+    PreviousSearch,
+    RetrievalRequest,
+    RetrievalResult,
+)
 from tests.fakes import SCENE, ScriptedModel
 
 pytestmark = pytest.mark.anyio
@@ -235,6 +240,22 @@ class TestAnswers:
         )
         ((part,),) = [first["params"]["message"]["parts"]]
         assert part == {"text": REQUEST.model_dump_json(), "mediaType": "application/json"}
+
+    async def test_the_question_an_answer_answers_crosses_intact(self) -> None:
+        run = StandIn()
+        config = settings()
+        asked = Clarification(
+            request="Radar scenes of Napels in September 2025", asked="Did you mean Naples?"
+        )
+        answer = RetrievalRequest(
+            text="Yes", today=REQUEST.today, previous_search=NAPLES_WEEK, clarifies=asked
+        )
+        async with agent(RetrievalExecutor(ScriptedModel(messages=iter([])), config, run), config=config) as (
+            client,
+            _,
+        ):
+            await client.retrieve(answer, "turn-1")
+        assert run.calls == [(answer, "turn-1")]
 
     async def test_an_infrastructure_result_from_the_agent_is_returned_as_it_is(self) -> None:
         failed = RetrievalResult(

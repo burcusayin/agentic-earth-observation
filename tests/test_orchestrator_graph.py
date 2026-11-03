@@ -16,9 +16,20 @@ import pytest
 
 from agentic_earth_observation.evals.golden import Route
 from agentic_earth_observation.orchestrator.client import RetrievalAgentError
-from agentic_earth_observation.orchestrator.graph import Orchestrator, OrchestratorState, route_after_decide
+from agentic_earth_observation.orchestrator.graph import (
+    REQUEST_LIMIT,
+    Orchestrator,
+    OrchestratorState,
+    next_pending,
+    route_after_decide,
+)
 from agentic_earth_observation.orchestrator.prompts import decide_system_prompt
-from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest, RetrievalResult
+from agentic_earth_observation.retrieval_agent.models import (
+    Clarification,
+    PreviousSearch,
+    RetrievalRequest,
+    RetrievalResult,
+)
 from agentic_earth_observation.retrieval_agent.prompts import retrieval_user_message
 from tests.fakes import (
     CONNECTION_REFUSED,
@@ -56,6 +67,8 @@ UNKNOWN = RetrievalResult(status="unknown_place", suggestions=["Naples"])
 DELEGATE = ollama_tool_call("Decision", route="delegate", reason="search")
 DECLINE = ollama_tool_call("Decision", route="decline", reason="out_of_scope")
 NO_PLACE = ollama_tool_call("Decision", route="clarify", reason="missing_place")
+NO_PERIOD = ollama_tool_call("Decision", route="clarify", reason="missing_period")
+ASKED = Clarification(request="Sentinel-2 scenes of Milan", asked="For which dates should I search?")
 
 
 @pytest.fixture
@@ -316,3 +329,127 @@ class TestBoundary:
         with pytest.raises(ValueError, match=message):
             await orch.run_turn(conversation, text, trace, TODAY)
         assert (ollama_server.requests, client.calls) == ([], [])
+
+
+class TestNextPending:
+    """Which question stays open after a turn, for the next turn to answer."""
+
+    def test_a_turn_that_asks_opens_a_question_about_its_request(self) -> None:
+        opened = next_pending(
+            None, "Sentinel-2 scenes of Milan", "For which dates?", asked=True, failed=False
+        )
+        assert opened == Clarification(request="Sentinel-2 scenes of Milan", asked="For which dates?")
+
+    def test_a_second_question_builds_on_the_first(self) -> None:
+        again = next_pending(ASKED, "with little cloud", "For which dates, again?", asked=True, failed=False)
+        assert again == Clarification(
+            request="Sentinel-2 scenes of Milan / with little cloud", asked="For which dates, again?"
+        )
+
+    @pytest.mark.parametrize("pending", [ASKED, None])
+    def test_a_turn_that_does_not_ask_settles_it(self, pending: Clarification | None) -> None:
+        assert next_pending(pending, "March 2025", "Found 4 scenes.", asked=False, failed=False) is None
+
+    @pytest.mark.parametrize("pending", [ASKED, None])
+    def test_a_failed_turn_leaves_it_as_it_was(self, pending: Clarification | None) -> None:
+        assert next_pending(pending, "March 2025", "Sorry.", asked=True, failed=True) is pending
+        assert next_pending(pending, "March 2025", "Sorry.", asked=False, failed=True) is pending
+
+    def test_a_request_too_long_to_carry_starts_again_from_this_turn(self) -> None:
+        fits = Clarification(request="x" * (REQUEST_LIMIT - 4), asked="?")
+        kept = next_pending(fits, "y", "?", asked=True, failed=False)
+        assert kept is not None
+        assert kept.request == "x" * (REQUEST_LIMIT - 4) + " / y"  # exactly at the limit: kept
+        too_long = Clarification(request="x" * (REQUEST_LIMIT - 3), asked="?")
+        assert next_pending(too_long, "y", "?", asked=True, failed=False) == Clarification(
+            request="y", asked="?"
+        )
+
+    def test_the_limit_is_the_one_the_request_accepts(self) -> None:
+        limits = [
+            m.max_length for m in Clarification.model_fields["request"].metadata if hasattr(m, "max_length")
+        ]
+        assert limits == [REQUEST_LIMIT]
+
+
+class TestAnsweringAQuestion:
+    async def test_an_answer_reaches_both_models_with_the_question_it_answers(self) -> None:
+        client = FakeClient(FOUND_MILAN)
+        orch, ollama_server = orchestrator([NO_PERIOD, DELEGATE], client)
+        first = await orch.run_turn("conv-1", "Sentinel-2 scenes of Milan", "turn-1", TODAY)
+        second = await orch.run_turn("conv-1", "March 2025", "turn-2", TODAY)
+        question = Clarification(request="Sentinel-2 scenes of Milan", asked=first.answer)
+        ((request, _),) = client.calls
+        assert request == RetrievalRequest(text="March 2025", today=TODAY, clarifies=question)
+        assert ollama_server.requests[1]["messages"][1]["content"] == retrieval_user_message(request)
+        assert (first.status, second.route, second.status) == ("clarified", Route.DELEGATE, "ok")
+
+    async def test_a_suggested_place_can_be_accepted(self) -> None:
+        client = FakeClient(UNKNOWN, FOUND_NAPLES)
+        orch, _ = orchestrator([DELEGATE, DELEGATE], client)
+        first = await orch.run_turn(
+            "conv-1", "Radar scenes of Napels, first week of September 2025", "turn-1", TODAY
+        )
+        await orch.run_turn("conv-1", "Yes", "turn-2", TODAY)
+        assert "Naples" in first.answer  # the suggestion
+        assert client.calls[0][0].clarifies is None
+        assert client.calls[1][0].clarifies == Clarification(
+            request="Radar scenes of Napels, first week of September 2025", asked=first.answer
+        )
+
+    async def test_questions_build_on_each_other(self) -> None:
+        client = FakeClient(FOUND_MILAN)
+        orch, _ = orchestrator([NO_PERIOD, NO_PERIOD, DELEGATE], client)
+        await orch.run_turn("conv-1", "Sentinel-2 scenes of Milan", "turn-1", TODAY)
+        second = await orch.run_turn("conv-1", "with little cloud", "turn-2", TODAY)
+        await orch.run_turn("conv-1", "March 2025", "turn-3", TODAY)
+        assert client.calls[0][0].clarifies == Clarification(
+            request="Sentinel-2 scenes of Milan / with little cloud", asked=second.answer
+        )
+
+    @pytest.mark.parametrize("settling", [DELEGATE, DECLINE])
+    async def test_a_turn_that_does_not_ask_settles_the_question(self, settling: OllamaStep) -> None:
+        client = FakeClient(FOUND_MILAN, FOUND_MILAN)
+        orch, ollama_server = orchestrator([NO_PERIOD, settling, DELEGATE], client)
+        for i, text in enumerate(["Sentinel-2 scenes of Milan", "March 2025", "And April?"]):
+            await orch.run_turn("conv-1", text, f"turn-{i}", TODAY)
+        assert client.calls[-1][0].clarifies is None
+        assert "THE SERVICE ASKED" not in ollama_server.requests[2]["messages"][1]["content"]
+
+    async def test_a_failed_turn_leaves_the_question_open(self) -> None:
+        client = FakeClient(FOUND_MILAN)
+        orch, _ = orchestrator([NO_PERIOD, ollama_text("Hmm."), DELEGATE], client)
+        first = await orch.run_turn("conv-1", "Sentinel-2 scenes of Milan", "turn-1", TODAY)
+        failed = await orch.run_turn("conv-1", "Erm", "turn-2", TODAY)
+        await orch.run_turn("conv-1", "March 2025", "turn-3", TODAY)
+        assert failed.failure == "parse_error"
+        assert client.calls[0][0].clarifies == Clarification(
+            request="Sentinel-2 scenes of Milan", asked=first.answer
+        )
+
+    async def test_infrastructure_leaves_the_question_open(self) -> None:
+        client = FakeClient(FOUND_MILAN)
+        orch, _ = orchestrator([NO_PERIOD, OllamaError(503, "server busy"), DELEGATE], client)
+        first = await orch.run_turn("conv-1", "Sentinel-2 scenes of Milan", "turn-1", TODAY)
+        busy = await orch.run_turn("conv-1", "March 2025", "turn-2", TODAY)
+        await orch.run_turn("conv-1", "March 2025", "turn-3", TODAY)
+        assert busy.infra_error is not None
+        assert client.calls[0][0].clarifies == Clarification(
+            request="Sentinel-2 scenes of Milan", asked=first.answer
+        )
+
+    async def test_a_question_belongs_to_its_conversation(self) -> None:
+        client = FakeClient(FOUND_MILAN)
+        orch, _ = orchestrator([NO_PERIOD, DELEGATE], client)
+        await orch.run_turn("conv-a", "Sentinel-2 scenes of Milan", "turn-1", TODAY)
+        await orch.run_turn("conv-b", "Sentinel-2 scenes of Milan, March 2025", "turn-2", TODAY)
+        assert client.calls[0][0].clarifies is None
+
+    async def test_the_memory_stays_plain_with_a_question_in_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+        orch, _ = orchestrator([NO_PERIOD, DELEGATE], FakeClient(FOUND_MILAN))
+        await orch.run_turn("conv-1", "Sentinel-2 scenes of Milan", "turn-1", TODAY)
+        await orch.run_turn("conv-1", "March 2025", "turn-2", TODAY)
+        assert not [r for r in caplog.records if "eserializ" in r.getMessage() or "msgpack" in r.getMessage()]

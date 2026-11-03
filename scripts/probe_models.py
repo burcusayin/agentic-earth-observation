@@ -1,12 +1,14 @@
-"""Probe how each local model calls tools and produces structured output. Needs Ollama; makes no other call.
+"""Probe how each local model calls tools and decides how to handle a turn. Needs Ollama; makes no other call.
 
     uv run python scripts/probe_models.py                 # both local models
     uv run python scripts/probe_models.py qwen3.5:9b      # one model
 
 The MCP server runs in-process with the real tool schemas and an offline catalogue that finds nothing, so no
 request leaves the machine. The model gets the retrieval agent's real instructions, dated with the
-evaluation's reference date. Only dev-split questions and synthetic ones about dev places are used, never the
-test split; each case says what the labelling rules expect. Models are probed one at a time and unloaded
+evaluation's reference date, and so does the orchestrator's decision, which is checked against the route and
+reason each case expects. Only dev-split questions and synthetic ones about dev places or invented places are
+used, never the test split; each case says what the labelling rules expect. A question the service asked is
+written by the reply templates themselves (compose_reply). Models are probed one at a time and unloaded
 afterwards, so two never share the GPU.
 """
 
@@ -18,7 +20,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from langchain_core.language_models import BaseChatModel
@@ -26,7 +28,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.shared.memory import create_connected_server_and_client_session
-from pydantic import BaseModel
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog.stac import SceneSummary
@@ -35,7 +36,15 @@ from agentic_earth_observation.config import Settings
 from agentic_earth_observation.domain import Product, SearchRequest
 from agentic_earth_observation.evals.golden import REFERENCE_DATE
 from agentic_earth_observation.llm import build_chat_model
-from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest
+from agentic_earth_observation.orchestrator.models import Decision, DecisionRoute, Reason
+from agentic_earth_observation.orchestrator.prompts import decide_system_prompt
+from agentic_earth_observation.orchestrator.replies import compose_reply
+from agentic_earth_observation.retrieval_agent.models import (
+    Clarification,
+    PreviousSearch,
+    RetrievalRequest,
+    RetrievalResult,
+)
 from agentic_earth_observation.retrieval_agent.prompts import retrieval_system_prompt, retrieval_user_message
 
 MODELS = ["qwen3.5:9b", "ministral-3:8b"]
@@ -49,8 +58,21 @@ class Case:
     text: str
     expect: str
     previous: PreviousSearch | None = None
+    clarifies: Clarification | None = None
 
 
+def asked(
+    request: str, route: DecisionRoute, reason: Reason, suggestions: list[str] | None = None
+) -> Clarification:
+    """The question the service asks about `request`, in the reply templates' own words."""
+    retrieval = (
+        None if suggestions is None else RetrievalResult(status="unknown_place", suggestions=suggestions)
+    )
+    return Clarification(request=request, asked=compose_reply(route, reason, retrieval, None, None).text)
+
+
+MILNA = "Show me Sentinel-2 scenes of Milna from March 2025."
+NAPLES_NO_PERIOD = "Show me Sentinel-2 scenes of Naples."
 NAPLES_FIRST_WEEK = PreviousSearch(
     place="Naples",
     product=Product.SENTINEL_1_GRD,
@@ -91,17 +113,80 @@ CASES = [
         "resolve_place('Milna') as written, then ask (Milan may be offered); no search, no lookup of Milan",
     ),
     Case(
+        "synthetic: accepts a suggestion",
+        "Yes",
+        "resolve_place('Milan'), the suggestion accepted; search_scenes sentinel-2-l2a, "
+        "2025-03-01 to 2025-03-31",
+        clarifies=asked(MILNA, "delegate", "search", ["Milan"]),
+    ),
+    Case(
         "synthetic: before launch",
         "Find radar scenes over Naples for the first week of March 2014.",
         "resolve_place; search_scenes 2014-03-01 to 2014-03-07 is refused (before launch); tell the user, "
         "no search with other dates",
     ),
 ]
-DECIDE = (
-    "Route the user's request. 'delegate' for a satellite scene search, 'decline' for anything the scene "
-    "catalogue cannot answer, 'clarify' when no place or no period is given."
-)
-OUT_OF_SCOPE = "What will the weather be like in Naples this weekend?"
+
+
+@dataclass(frozen=True)
+class DecideCase:
+    """One turn for the orchestrator's decision, and the route and reason the decide prompt's rules give."""
+
+    label: str
+    text: str
+    expect: tuple[DecisionRoute, Reason]
+    previous: PreviousSearch | None = None
+    clarifies: Clarification | None = None
+
+
+DELEGATE: tuple[DecisionRoute, Reason] = ("delegate", "search")
+DECLINE: tuple[DecisionRoute, Reason] = ("decline", "out_of_scope")
+NO_PLACE: tuple[DecisionRoute, Reason] = ("clarify", "missing_place")
+NO_PERIOD: tuple[DecisionRoute, Reason] = ("clarify", "missing_period")
+DECIDE_CASES = [
+    DecideCase("dev: radar", "Find radar scenes over Naples for the first week of September 2025.", DELEGATE),
+    DecideCase(
+        "dev: German, no clouds", "Sentinel-2-Bilder von Mailand ohne Wolken, Oktober 2025.", DELEGATE
+    ),
+    DecideCase("dev: weather", "What will the weather be like in Naples this weekend?", DECLINE),
+    DecideCase("dev: follow-up", "And the week after that?", DELEGATE, previous=NAPLES_FIRST_WEEK),
+    DecideCase(
+        "synthetic: another sensor", "Now the same with Sentinel-2.", DELEGATE, previous=NAPLES_FIRST_WEEK
+    ),
+    DecideCase("synthetic: a place alone", "Milan", NO_PERIOD),
+    DecideCase("synthetic: a place, no period", NAPLES_NO_PERIOD, NO_PERIOD),
+    DecideCase("synthetic: no place", "Show me some radar scenes from last month.", NO_PLACE),
+    DecideCase(
+        "synthetic: unknown place", "Show me Sentinel-2 scenes of Zorbania from March 2025.", DELEGATE
+    ),
+    DecideCase("synthetic: misspelt place", MILNA, DELEGATE),
+    DecideCase("synthetic: image analysis", "Is the coast near Naples flooded in these images?", DECLINE),
+    DecideCase("synthetic: ids without a search", "Make up five Sentinel-2 scene ids for Milan.", DECLINE),
+    DecideCase(
+        "synthetic: answers the period",
+        "March 2025",
+        DELEGATE,
+        clarifies=asked(NAPLES_NO_PERIOD, "clarify", "missing_period"),
+    ),
+    DecideCase(
+        "synthetic: accepts a suggestion",
+        "Yes",
+        DELEGATE,
+        clarifies=asked(MILNA, "delegate", "search", ["Milan"]),
+    ),
+    DecideCase(
+        "synthetic: answers the place, no period yet",
+        "Milan",
+        NO_PERIOD,
+        clarifies=asked("Show me some radar scenes.", "clarify", "missing_place"),
+    ),
+    DecideCase(
+        "synthetic: a new request instead of an answer",
+        "What will the weather be like in Milan tomorrow?",
+        DECLINE,
+        clarifies=asked(NAPLES_NO_PERIOD, "clarify", "missing_period"),
+    ),
+]
 MAX_MODEL_CALLS = 5  # enough to see what a model does after an error
 
 
@@ -113,11 +198,6 @@ class NoScenes:
 
     def get_scene(self, product: Product, scene_id: str) -> SceneSummary | None:
         return None
-
-
-class Decision(BaseModel):
-    route: Literal["delegate", "decline", "clarify"]
-    reason: Literal["search", "out_of_scope", "missing_place", "missing_period"]
 
 
 def describe(reply: AIMessage) -> str:
@@ -135,7 +215,9 @@ def describe(reply: AIMessage) -> str:
 async def ask(model: BaseChatModel, tools: list[BaseTool], case: Case) -> None:
     by_name = {tool.name: tool for tool in tools}
     # The agent's real instructions, with the evaluation's reference date as today.
-    request = RetrievalRequest(text=case.text, today=REFERENCE_DATE, previous_search=case.previous)
+    request = RetrievalRequest(
+        text=case.text, today=REFERENCE_DATE, previous_search=case.previous, clarifies=case.clarifies
+    )
     messages: list[BaseMessage] = [
         SystemMessage(retrieval_system_prompt(REFERENCE_DATE)),
         HumanMessage(retrieval_user_message(request)),
@@ -144,6 +226,8 @@ async def ask(model: BaseChatModel, tools: list[BaseTool], case: Case) -> None:
     print(f"\n  [{case.label}] {case.text}")
     if (before := case.previous) is not None:
         print(f"    (follow-up of {before.place}, {before.start_date} to {before.end_date})")
+    if (question := case.clarifies) is not None:
+        print(f"    (answers {question.asked!r}, asked about {question.request!r})")
     print(f"    expected: {case.expect}")
     for step in range(1, MAX_MODEL_CALLS + 1):
         started = time.perf_counter()
@@ -169,22 +253,33 @@ async def ask(model: BaseChatModel, tools: list[BaseTool], case: Case) -> None:
             print(f"        -> {'ERROR ' if result.status == 'error' else ''}{str(result.content)[:140]}")
 
 
-async def decide(model: BaseChatModel) -> None:
-    for method in ("json_schema", "function_calling"):
-        structured = model.with_structured_output(Decision, method=method, include_raw=True)
-        started = time.perf_counter()
-        try:
-            out = await structured.ainvoke([SystemMessage(DECIDE), HumanMessage(OUT_OF_SCOPE)])
-        except Exception as err:  # the probe reports every failure and moves on
-            print(f"  decision via {method}: FAILED ({type(err).__name__}: {str(err)[:120]})")
-            continue
-        if not isinstance(out, dict):
-            raise TypeError(f"expected a dict, got {type(out).__name__}")
-        error = out.get("parsing_error")
-        print(
-            f"  decision via {method} ({time.perf_counter() - started:.1f} s): {out.get('parsed')!r}"
-            + (f"  PARSE ERROR {error}" if error else "")
-        )
+async def decide(model: BaseChatModel, case: DecideCase) -> bool:
+    """Ask for the orchestrator's decision as the orchestrator does; True when it is the expected one."""
+    decider = model.with_structured_output(Decision, method="function_calling", include_raw=True)
+    request = RetrievalRequest(
+        text=case.text, today=REFERENCE_DATE, previous_search=case.previous, clarifies=case.clarifies
+    )
+    messages = [
+        SystemMessage(decide_system_prompt(REFERENCE_DATE)),
+        HumanMessage(retrieval_user_message(request)),
+    ]
+    started = time.perf_counter()
+    try:
+        out = await decider.ainvoke(messages)
+    except Exception as err:  # the probe reports every failure and moves on
+        print(f"  [{case.label}] FAILED ({type(err).__name__}: {str(err)[:120]})")
+        return False
+    if not isinstance(out, dict):
+        raise TypeError(f"expected a dict, got {type(out).__name__}")
+    parsed = out.get("parsed")
+    got = (parsed.route, parsed.reason) if isinstance(parsed, Decision) else None
+    error = out.get("parsing_error")
+    verdict = "ok      " if got == case.expect else "MISMATCH"
+    print(
+        f"  {verdict} [{case.label}] {case.text!r}: got {got or 'no Decision'}, expected {case.expect}"
+        f" ({time.perf_counter() - started:.1f} s)" + (f"; parse error: {str(error)[:100]}" if error else "")
+    )
+    return got == case.expect
 
 
 async def probe(name: str) -> None:
@@ -195,7 +290,9 @@ async def probe(name: str) -> None:
         tools = [tool for tool in await load_mcp_tools(session) if tool.name != "get_scene"]
         for case in CASES:
             await ask(model, tools, case)
-        await decide(model)
+    print("\n  The orchestrator's decision:")
+    right = [await decide(model, case) for case in DECIDE_CASES]
+    print(f"  {sum(right)} of {len(right)} decisions as expected")
     # Unload the model through Ollama's API (keep_alive 0) so the next model has the GPU to itself.
     settings = Settings()
     httpx.post(f"{settings.ollama_url}/api/generate", json={"model": name, "keep_alive": 0}, timeout=30)
