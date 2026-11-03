@@ -216,3 +216,17 @@ decision is made or reversed; do not rewrite old entries.
   - **Only this machine may start a turn:** the server binds to 127.0.0.1; a Host other than 127.0.0.1 or
     localhost is refused (400), and so is any request with an Origin header (403), so that a web page cannot
     start an agent run. The SDK's client sends no Origin.
+- **How the orchestrator calls the retrieval agent** (`orchestrator/client.py`). Checked against the SDK's
+  source and by running each failure, over a real socket where it matters.
+  - A completed task gives the agent's `RetrievalResult`, which may itself carry an `infra_error`.
+  - An agent that cannot be reached, does not answer within `EO_A2A_TIMEOUT_S`, or drops the connection gives
+    a result with `infra_error` (for example `A2A ReadTimeout`), the same shape as the agent's own
+    infrastructure failures. The SDK wraps these as its own errors with the httpx failure as the cause, which
+    is what is checked.
+  - A rejected or failed task raises `RetrievalAgentError`, with the agent's reason and the trace id: either is
+    a bug, and must never be excluded from the scores as infrastructure. The evaluation runner will record such
+    a task as errored, apart from infrastructure and model failures.
+  - Anything else is raised as it is: an HTTP error (a refused request, a missing card), a JSON-RPC error, an
+    answer that is not JSON, or an answer that breaks the contract (not one JSON result).
+  - The request never asks for streaming, so there is always one answer to read, and each call is bounded by
+    the HTTP timeout: the SDK swallows cancellation, so asyncio.timeout would not bound it.

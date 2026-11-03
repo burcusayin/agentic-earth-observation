@@ -23,7 +23,8 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
   - `retrieval_agent/`: `models.py` (request and result), `prompts.py`, `agent.py` (the LangGraph loop and
     `run_retrieval`, one turn over MCP), `a2a_server.py` (the agent over A2A) and `__main__.py` (one question
     from the command line).
-  - `orchestrator/`: the LangGraph orchestrator; an A2A client (not yet implemented).
+  - `orchestrator/`: `client.py`, the A2A client of the retrieval agent; the LangGraph orchestrator
+    (`graph.py`) is not yet implemented.
   - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.

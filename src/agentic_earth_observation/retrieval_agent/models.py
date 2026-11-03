@@ -20,6 +20,11 @@ PlaceName = Annotated[str, Field(min_length=1, max_length=200)]
 # Both sides of A2A validate these from JSON. strict: a number must be a number and a date a "YYYY-MM-DD"
 # string, never a timestamp. Text is stripped before its length is checked.
 A2A_CONFIG = ConfigDict(frozen=True, extra="forbid", strict=True, str_strip_whitespace=True)
+# How they travel over A2A (decision of 2026-11-03): each as one text part of this media type, with the turn's
+# trace id in the request metadata under TRACE_KEY, and the result as the completed task's one artifact.
+A2A_MEDIA_TYPE = "application/json"
+TRACE_KEY = "trace_id"
+RESULT_ARTIFACT = "retrieval_result"
 
 
 class PreviousSearch(BaseModel):

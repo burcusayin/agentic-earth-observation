@@ -55,13 +55,18 @@ from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.llm import build_chat_model
 from agentic_earth_observation.retrieval_agent.agent import run_retrieval
-from agentic_earth_observation.retrieval_agent.models import RetrievalRequest, RetrievalResult
+from agentic_earth_observation.retrieval_agent.models import (
+    A2A_MEDIA_TYPE,
+    RESULT_ARTIFACT,
+    TRACE_KEY,
+    RetrievalRequest,
+    RetrievalResult,
+)
 
 logger = logging.getLogger(__name__)
 
-JSON = "application/json"
+JSON = A2A_MEDIA_TYPE
 RPC_PATH = "/a2a"
-TRACE_KEY = "trace_id"  # the request metadata entry that carries the turn's trace id
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 Retrieve = Callable[[RetrievalRequest, str, BaseChatModel, Settings], Awaitable[RetrievalResult]]
 
@@ -94,7 +99,7 @@ class RetrievalExecutor(AgentExecutor):
             await updater.failed(updater.new_agent_message([Part(text=reason)]))
             return
         await updater.add_artifact(
-            [Part(text=result.model_dump_json(), media_type=JSON)], name="retrieval_result"
+            [Part(text=result.model_dump_json(), media_type=JSON)], name=RESULT_ARTIFACT
         )
         await updater.complete()
 
