@@ -51,7 +51,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID
+from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, TRACE_ID_RULE
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.llm import build_chat_model
 from agentic_earth_observation.retrieval_agent.agent import run_retrieval
@@ -113,9 +113,7 @@ def read_trace_id(metadata: dict[str, Any]) -> str:
     """The turn's trace id from the request metadata, which the client sets; refused unless it is valid."""
     value = metadata.get(TRACE_KEY)
     if not isinstance(value, str) or not TRACE_ID.fullmatch(value):
-        raise ValueError(
-            f"the request metadata needs a {TRACE_KEY!r}: 1 to 64 letters, digits, '.', '_' or '-'"
-        )
+        raise ValueError(f"the request metadata needs a {TRACE_KEY!r}: {TRACE_ID_RULE}")
     return value
 
 

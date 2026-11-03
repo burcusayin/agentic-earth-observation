@@ -42,7 +42,7 @@ from mcp.shared._httpx_utils import McpHttpClientFactory
 
 from agentic_earth_observation.catalog.stac import SceneSummary
 from agentic_earth_observation.catalog_mcp.server import PlaceResult, SearchResult
-from agentic_earth_observation.catalog_mcp.tool_log import TRACE_HEADER, TRACE_ID
+from agentic_earth_observation.catalog_mcp.tool_log import TRACE_HEADER, TRACE_ID, TRACE_ID_RULE
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.failures import describe, is_infrastructure, leaves
 from agentic_earth_observation.llm import unreadable_reply
@@ -153,7 +153,7 @@ async def run_retrieval(
     server.
     """
     if not TRACE_ID.fullmatch(trace_id):
-        raise ValueError(f"invalid trace id {trace_id!r}: use 1 to 64 letters, digits, '.', '_' or '-'")
+        raise ValueError(f"invalid trace id {trace_id!r}: use {TRACE_ID_RULE}")
     started = time.perf_counter()
     counter = _UsageCounter()
     deadline = asyncio.timeout(settings.turn_deadline_s)

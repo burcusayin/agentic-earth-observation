@@ -27,7 +27,7 @@ from a2a.client import Client, ClientConfig, create_client
 from a2a.types.a2a_pb2 import Message, Part, Role, SendMessageRequest, StreamResponse, TaskState
 from pydantic import ValidationError
 
-from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID
+from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, TRACE_ID_RULE
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.failures import NETWORK_FAILURES
 from agentic_earth_observation.retrieval_agent.models import (
@@ -74,7 +74,7 @@ class A2ARetrievalClient:
 
     async def retrieve(self, request: RetrievalRequest, trace_id: str) -> RetrievalResult:
         if not TRACE_ID.fullmatch(trace_id):
-            raise ValueError(f"invalid trace id {trace_id!r}: use 1 to 64 letters, digits, '.', '_' or '-'")
+            raise ValueError(f"invalid trace id {trace_id!r}: use {TRACE_ID_RULE}")
         sent = SendMessageRequest(
             message=Message(
                 role=Role.ROLE_USER,

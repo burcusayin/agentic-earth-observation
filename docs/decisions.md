@@ -312,3 +312,20 @@ decision is made or reversed; do not rewrite old entries.
   retried after 0, 1 and 2 s, whatever pause the public service had asked for. urllib3's own cap
   (`retry_after_max`, kept on every retry) now limits the pause to 10 s. Without the header the backoff is
   unchanged, and the 90 s STAC deadline still bounds the whole call.
+
+## 2026-11-04
+- **The review of PR #3.** An adversarial review raised ten findings; each was checked against the code, the
+  installed libraries or a reproduction before anything changed.
+  - **Fixed:** the decision's deadline, `.env` and Retry-After (entries of 2026-11-03); the chat's refusals
+    (below); the trace-id rule now described once (`TRACE_ID_RULE`); one request built for both models; and a
+    `noqa` given its reason.
+  - **The chat ends on a bug inside a turn.** It took any `ValueError` for a refused line, and pydantic's
+    `ValidationError` is one, so a grounding refusal or a graph bug was shown as a line it cannot take.
+    `run_turn` now raises `TurnRefused` for the lines it refuses, and only those are caught.
+  - **Not changed, with the evidence:**
+    - A deadline arriving inside an exception group: anyio 4.15.1 never puts a `CancelledError` into a
+      group, the MCP client catches its own stream errors, and a real bug raised while the deadline cancels a
+      turn is raised by design, as its test states.
+    - `read_tool_calls` reads the whole log for each lookup: a Milestone 1 run takes seconds. The evaluation
+      runner will keep one log per run.
+    - The MCP server lists its four tools on every call: the alternative is FastMCP's private tool manager.

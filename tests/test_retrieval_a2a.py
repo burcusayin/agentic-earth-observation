@@ -147,7 +147,7 @@ def json_text(text: str) -> Part:
     return Part(text=text, media_type=JSON)
 
 
-async def send(client: Client, sent: Message, metadata: dict[str, Any] | None, **configuration: Any) -> Task:  # noqa: ANN401
+async def send(client: Client, sent: Message, metadata: dict[str, Any] | None, **configuration: Any) -> Task:  # noqa: ANN401 - SendMessageConfiguration's fields
     request = SendMessageRequest(
         message=sent, metadata=metadata or {}, configuration=SendMessageConfiguration(**configuration)
     )

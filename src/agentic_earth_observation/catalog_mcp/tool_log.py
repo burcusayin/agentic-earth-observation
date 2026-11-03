@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 TRACE_HEADER = "X-EO-Trace"
 TRACE_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")  # the header is untrusted input; matched in full
+TRACE_ID_RULE = "1 to 64 letters, digits, '.', '_' or '-'"  # TRACE_ID in words, for the messages refusing one
 
 ErrorKind = Literal["invalid_arguments", "unknown_tool", "catalogue", "cancelled", "other"]
 

@@ -29,7 +29,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
 
-from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID
+from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, TRACE_ID_RULE
 from agentic_earth_observation.evals.golden import Route
 from agentic_earth_observation.failures import describe, is_infrastructure
 from agentic_earth_observation.llm import unreadable_reply
@@ -110,15 +110,9 @@ def build_graph(
     decider = model.with_structured_output(Decision, method="function_calling", include_raw=True)
 
     async def decide(state: OrchestratorState) -> dict[str, object]:
-        request = RetrievalRequest(
-            text=state["text"],
-            today=state["today"],
-            previous_search=_previous(state),
-            clarifies=_pending(state),
-        )
         messages = [
             SystemMessage(decide_system_prompt(state["today"])),
-            HumanMessage(retrieval_user_message(request)),
+            HumanMessage(retrieval_user_message(_request(state))),
         ]
         started = time.perf_counter()
         usage = Usage(model=model_id, model_calls=1)
@@ -156,13 +150,8 @@ def build_graph(
         return {"route": decision.route, "reason": decision.reason, "decision_usage": spent}
 
     async def delegate(state: OrchestratorState) -> dict[str, object]:
-        request = RetrievalRequest(
-            text=state["text"],
-            today=state["today"],
-            previous_search=_previous(state),
-            clarifies=_pending(state),
-        )
-        result = await client.retrieve(request, state["trace_id"])  # RetrievalAgentError: a bug, raised
+        # RetrievalAgentError: a bug, raised
+        result = await client.retrieve(_request(state), state["trace_id"])
         update: dict[str, object] = {
             "retrieval": result.model_dump_json(),
             "failure": result.failure,
@@ -212,6 +201,13 @@ def _pending(state: OrchestratorState) -> Clarification | None:
     return None if stored is None else Clarification.model_validate_json(stored)
 
 
+def _request(state: OrchestratorState) -> RetrievalRequest:
+    """The turn as both models read it: the one that decides, and the retrieval agent it is sent to."""
+    return RetrievalRequest(
+        text=state["text"], today=state["today"], previous_search=_previous(state), clarifies=_pending(state)
+    )
+
+
 def next_pending(
     pending: Clarification | None, text: str, reply: str, *, asked: bool, failed: bool
 ) -> Clarification | None:
@@ -256,7 +252,7 @@ class Orchestrator:
         retrieval agent (RetrievalAgentError), is raised.
         """
         if not TRACE_ID.fullmatch(trace_id) or not TRACE_ID.fullmatch(conversation_id):
-            raise TurnRefused("ids are 1 to 64 letters, digits, '.', '_' or '-'")
+            raise TurnRefused(f"ids are {TRACE_ID_RULE}")
         try:
             RetrievalRequest(text=text, today=today)  # the text must be one the retrieval agent accepts
         except ValidationError as err:
