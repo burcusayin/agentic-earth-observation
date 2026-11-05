@@ -329,3 +329,42 @@ decision is made or reversed; do not rewrite old entries.
     - `read_tool_calls` reads the whole log for each lookup: a Milestone 1 run takes seconds. The evaluation
       runner will keep one log per run.
     - The MCP server lists its four tools on every call: the alternative is FastMCP's private tool manager.
+
+## 2026-11-05
+- **The evaluation runner starts the MCP server and the retrieval agent itself, one pair per run, and stops
+  them at the end.**
+  - The retrieval agent's model is fixed when its server starts, and so is the file of the tool-call log. Every
+    run therefore needs both servers restarted with the right settings. Done by hand, a forgotten restart
+    gives a run whose two agents use different models, or two runs in one log, and the run record would not
+    show it.
+  - Started by the runner from the same checkout, the servers are also what the record's commit and hashes
+    describe.
+  - The runner refuses to start while something answers on either server's port, and stops a run in which the
+    retrieval agent reports another model than the run's.
+- **A run is one model's pass over one split, with its own folder:** `run.json` (the run record),
+  `attempts.jsonl` (one record per attempt of a task, written as each attempt ends, so a run cut short keeps
+  what it finished) and `tool_calls.jsonl` (the MCP server's log of that run only).
+- **A bug in our own system during a run makes the attempt `errored`.** This covers a retrieval agent that
+  fails or rejects a request (2026-11-03) and any unexpected error in a turn.
+  - The attempt is recorded with the error and is not retried. The task counts as failed, and is listed apart
+    from model failures and infrastructure.
+  - The run goes on, and ends as aborted at the third errored task: by then the system is broken, not a task.
+  - A run with an errored task is marked in the report. After a fix the runs are repeated, and both are listed.
+  - This is the "tolerate up to N errors" mode of the Inspect AI evaluation framework, whose default is to
+    stop at the first error and resume later (https://inspect.aisi.org.uk/handling-errors.html). The runner
+    has no resume, so stopping at once would lose the rest of an unattended run.
+- **A delegated turn with no tool call in the log is scored as it is when the model called no tool.** It then
+  fails the required tools, as a model's own failure should; counting every such turn as infrastructure would
+  retry and exclude it. Only when the agent's result shows that a tool ran (`ok`, `empty`, `unknown_place` or
+  `error`) and the log has no call for it do the agent and the log disagree, and that attempt is `errored`.
+- **The two Mistral API models are run last, after the local runs.** If they cannot be run by then, the first
+  release reports the local models, and the API runs move to the follow-up milestones.
+- **What a run record's dirty flag covers** (`evals/records.py`).
+  - Tracked files with changes, staged or not, and untracked files that are not ignored.
+  - Not `results/`, which holds what runs write: otherwise the first run of a night would make every later
+    one dirty.
+  - git is asked for untracked files explicitly, because a user's git configuration can hide them, and the
+    checkout must be the top of its own repository, so that a folder inside another repository is never
+    described by that repository's commit.
+- **Run records keep named settings only,** never the API key or a path on the machine. A test fails when a
+  setting is neither recorded nor left out for a stated reason.
