@@ -368,3 +368,42 @@ decision is made or reversed; do not rewrite old entries.
     described by that repository's commit.
 - **Run records keep named settings only,** never the API key or a path on the machine. A test fails when a
   setting is neither recorded nor left out for a stated reason.
+
+## 2026-11-06
+- **How the runner counts a turn** (`evals/outcome.py`). The first rule that applies decides:
+
+  | # | What happened | The attempt is |
+  |---|---|---|
+  | 1 | the turn raised an error | `errored`: not retried, the task counts as failed |
+  | 2 | the turn reports an infrastructure failure | `infrastructure`: the task is tried again, at most twice |
+  | 3 | the log has a call that the catalogue failed | `infrastructure` |
+  | 4 | the turn's output and the log disagree (next entry) | `errored` |
+  | 5 | none of these | scored, and the next turn runs |
+
+  - Infrastructure is decided before the output and the log are compared. The plan of 2026-11-05 put a bug
+    first; but after an infrastructure failure the agent's result is a placeholder that reports none of the
+    calls it made, so the comparison would take a timeout for a bug.
+  - A catalogue failure counts wherever it is in the turn, even when a later search succeeded (2026-11-02).
+- **What a turn's output and the log must agree on,** when the turn reports no infrastructure failure:
+
+  | The output says | The log has |
+  |---|---|
+  | the turn was not delegated | no call |
+  | `ok` or `empty` | a successful `search_scenes`, the last of which returned the result's scene ids in the same order and has the result's search arguments |
+  | any other status | no successful `search_scenes` |
+  | `unknown_place` | an answered `resolve_place` |
+  | `error` | a failed call |
+  | `not_searched` | nothing more is required: the turn is scored as it is (2026-11-05) |
+  | anything | no failed call that the server cannot explain (`other`), and no cancelled call |
+
+  - A refused call (`invalid_arguments`) is the model's doing, and never a disagreement.
+  - The logged arguments are read as the agent reads its own, so 20 and 20.0 are the same cloud limit. The
+    place name is the agent's addition, which no call carries, and is not compared.
+  - `other` means a bug in the server or in a tool. A cancelled call comes from a client that gave up, which
+    a turn reports as infrastructure; in a turn that reports none, it is unexplained.
+  - Checked against whole turns through the real retrieval loop, the MCP server and its log, with a scripted
+    model: no ordinary turn is taken for a disagreement, including two searches sent at once of which the
+    first finishes last.
+- **Tool calls recorded under none of the run's trace ids change no attempt.** They cannot be tied to a task,
+  so excluding or failing a task for them would be a guess. The runner counts them in the run record, and the
+  report marks such a run.
