@@ -120,7 +120,11 @@ def _describe(failure: BaseException) -> str:
 
 def _result(answers: list[StreamResponse], trace_id: str) -> RetrievalResult:
     """The result in the agent's answer, which must be one completed task with one JSON result."""
-    if len(answers) != 1 or not answers[0].HasField("task"):
+    if len(answers) != 1:
+        raise RetrievalAgentError(
+            f"the retrieval agent answered turn {trace_id} {len(answers)} times, not once"
+        )
+    if not answers[0].HasField("task"):
         raise RetrievalAgentError(f"the retrieval agent answered turn {trace_id} without a task")
     task = answers[0].task
     if task.status.state != TaskState.TASK_STATE_COMPLETED:

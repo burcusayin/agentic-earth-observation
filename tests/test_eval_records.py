@@ -4,6 +4,7 @@ the hashes and the settings in them come from. No network and no model: git runs
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -91,6 +92,8 @@ def run_record(**changes: Any) -> RunRecord:  # noqa: ANN401 - any field of the 
             tool_descriptions=A_HASH,
             golden=A_HASH,
             evaluation_code=A_HASH,
+            gazetteer=A_HASH,
+            evaluation_rules=A_HASH,
         ),
         "reference_date": date(2025, 12, 15),
         "shuffle_seed": 42,
@@ -253,6 +256,8 @@ def test_a_hash_is_64_lowercase_hex_characters(value: str) -> None:
             tool_descriptions=A_HASH,
             golden=value,
             evaluation_code=A_HASH,
+            gazetteer=A_HASH,
+            evaluation_rules=A_HASH,
         )
 
 
@@ -489,7 +494,7 @@ def test_no_secret_and_no_local_path_gets_into_a_run_record(tmp_path: Path) -> N
     assert str(tmp_path) not in written
 
 
-def test_the_hashes_are_those_of_the_prompts_the_golden_set_and_the_evaluation_code() -> None:
+def test_the_hashes_are_those_of_the_prompts_and_of_every_frozen_file() -> None:
     found = hashes(A_HASH)
 
     assert found == Hashes(
@@ -498,8 +503,11 @@ def test_the_hashes_are_those_of_the_prompts_the_golden_set_and_the_evaluation_c
         tool_descriptions=A_HASH,
         golden=golden_hash(),
         evaluation_code=evaluation_code_hash(),
+        gazetteer=hashlib.sha256((ROOT / "data" / "gazetteer.json").read_bytes()).hexdigest(),
+        evaluation_rules=hashlib.sha256((ROOT / "docs" / "evaluation.md").read_bytes()).hexdigest(),
     )
     assert found.retrieval_prompt != found.decide_prompt
+    assert len({found.golden, found.evaluation_code, found.gazetteer, found.evaluation_rules}) == 4
 
 
 def test_the_library_versions_name_every_library_and_python() -> None:
@@ -696,6 +704,8 @@ def test_a_written_run_record_is_plain_json_with_the_documented_fields(tmp_path:
         "tool_descriptions",
         "golden",
         "evaluation_code",
+        "gazetteer",
+        "evaluation_rules",
     }
     assert stored["shuffle_seed"] == 42
     assert stored["reference_date"] == "2025-12-15"

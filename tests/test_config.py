@@ -264,8 +264,11 @@ def test_a_local_url_names_this_machine(url: str, local: bool) -> None:
     "message",
     [
         "llama-server process no longer running: -1 ",
+        "llama-server process has terminated: exit status 2: signal: killed",
         "timed out waiting for llama-server to start: context deadline exceeded",
         "model is too large for system memory",
+        "no slots available after 10 retries",
+        "llm busy - no slots available",
     ],
 )
 @pytest.mark.parametrize("status", [500, -1])

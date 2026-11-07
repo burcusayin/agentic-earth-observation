@@ -268,6 +268,8 @@ def run_record(status: str = "complete", reason: str | None = None) -> RunRecord
             tool_descriptions="ab" * 32,
             golden="ab" * 32,
             evaluation_code="ab" * 32,
+            gazetteer="ab" * 32,
+            evaluation_rules="ab" * 32,
         ),
         reference_date=TODAY,
         shuffle_seed=1,

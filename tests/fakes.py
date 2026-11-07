@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -109,6 +109,21 @@ class ScriptedModel(GenericFakeChatModel):
     ) -> ChatResult:
         self.seen.append(list(messages))
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+class BrokenModel(ScriptedModel):
+    """A model wrapper with a bug in it: every call raises `bug`."""
+
+    bug: Exception = ValueError("a bug in the model wrapper")
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,  # noqa: ANN401 - the signature of BaseChatModel._agenerate
+    ) -> ChatResult:
+        raise self.bug
 
 
 def tool_call(tool: str, call_id: str = "call-1", /, **args: object) -> AIMessage:

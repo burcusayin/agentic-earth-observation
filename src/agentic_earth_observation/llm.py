@@ -23,12 +23,14 @@ OLLAMA_BUSY = 503  # Ollama's answer when its queue of requests is full
 # How Ollama (0.40.1) reports a reply its parser could not read: HTTP 500 if nothing was sent yet, otherwise
 # an error inside the stream, which the client gives the status -1.
 OLLAMA_UNREADABLE = (500, -1)
-# Ollama's words for its own trouble, in errors of the same statuses: the server ran out of memory or its
-# runner died, whatever the model wrote. Read from the binary of Ollama 0.40.1 (decision of 2026-11-07).
+# Ollama's words for its own trouble, in errors of the same statuses: no memory, a runner that died or never
+# started, or no free slot, whatever the model wrote. From the Ollama 0.40.1 binary (decision of 2026-11-07).
 OLLAMA_OWN_TROUBLE = (
     "process no longer running",
+    "process has terminated",
     "waiting for llama-server to start",
     "too large for system memory",
+    "no slots available",
 )
 PARSER_ERROR = "error parsing tool call"  # quotes the model's own text, which could hold those words
 

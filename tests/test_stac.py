@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 from datetime import timedelta
 from typing import Any
 
@@ -24,6 +25,7 @@ from agentic_earth_observation.catalog.stac import (
     StacCatalog,
     footprint_boxes,
     matches,
+    only_to,
     retry_policy,
     summarise,
 )
@@ -138,6 +140,11 @@ class TestMatches:
     def test_rejects_cloud_cover_above_the_threshold(self) -> None:
         item = raw_item(properties={"eo:cloud_cover": 37.5})
         assert not matches(self.scene(item), item, ROME_JULY_CLOUD_10)
+
+    def test_keeps_cloud_cover_exactly_at_the_threshold(self) -> None:
+        # The request asks for "at most 10", as the catalogue's own filter (lte) does.
+        item = raw_item(properties={"eo:cloud_cover": 10.0})
+        assert matches(self.scene(item), item, ROME_JULY_CLOUD_10)
 
     def test_rejects_unknown_cloud_cover_when_a_threshold_is_set(self) -> None:
         item = raw_item(properties={"eo:cloud_cover": None})
@@ -290,6 +297,32 @@ class TestOnlyTheConfiguredCatalogue:
         assert len(StacCatalog(URL).search(ROME_JULY_CLOUD_10)) == 1
         assert [str(r.url).rstrip("/") for r in sent] == [URL, f"{URL}/search", f"{URL}:443/search"]
 
+    @pytest.mark.parametrize(
+        "written",
+        [
+            # urllib.parse reads the host after the last "@": the catalogue's. urllib3, which sends the
+            # request, stops at the backslash and sends it to evil.example.
+            "https://evil.example\\@catalogue.example/search",
+            "https://user:secret@catalogue.example/search",
+            "https://catalogue.example@evil.example/search",
+            "http://catalogue.example/search",
+            "https://catalogue.example:8443/search",
+            "https://catalogue.ex"
+            + chr(0x430)
+            + "mple/search",  # a Cyrillic letter: another host once encoded
+            "search",  # relative: pystac-client resolves links itself, so a bare path has no origin
+        ],
+    )
+    def test_the_link_is_read_as_the_sender_reads_it(self, written: str) -> None:
+        with pytest.raises(ValueError, match="refused a link away from the configured catalogue"):
+            only_to(URL)(requests.Request("GET", written))
+
+    @pytest.mark.parametrize(
+        "written", ["HTTPS://CATALOGUE.EXAMPLE/search", f"{URL}:443/search?limit=1", f"{URL}/search/"]
+    )
+    def test_a_spelling_of_the_catalogues_own_origin_passes(self, written: str) -> None:
+        only_to(URL)(requests.Request("GET", written))
+
     @pytest.mark.parametrize("status", [301, 302, 307, 308])
     def test_a_redirect_is_not_followed(self, monkeypatch: pytest.MonkeyPatch, status: int) -> None:
         sent = the_wire(monkeypatch, http_answer(status, Location="http://127.0.0.1:8001/mcp"))
@@ -335,6 +368,18 @@ class TestWhoseFailureItIs:
             str(raised.value)
             == f"scene search failed: the catalogue did not answer correctly (HTTP {status})"
         )
+
+    def test_a_catalogue_that_no_longer_offers_item_search_is_a_failed_catalogue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # pystac-client raises this from `search()`, next to the errors in our own parameters: it is the
+        # catalogue's landing page that changed, not our request.
+        landing = {**LANDING, "conformsTo": ["https://api.stacspec.org/v1.0.0/core"]}
+        monkeypatch.setitem(LANDING, "conformsTo", landing["conformsTo"])
+        the_wire(monkeypatch)
+        with pytest.raises(CatalogError, match="did not answer correctly") as raised:
+            StacCatalog(URL).search(ROME_JULY_CLOUD_10)
+        assert not isinstance(raised.value, CatalogRefused)
 
     @pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
     def test_a_catalogue_in_trouble_is_a_failed_catalogue(
@@ -442,6 +487,36 @@ class TestFootprintsAndTimes:
         scene = summarise(item, Product.SENTINEL_2_L2A, S2)
         assert scene is not None
         assert matches(scene, item, request)
+
+    @pytest.mark.parametrize(
+        "footprint",
+        [
+            pytest.param([12.0, 41.0, 13.0, math.nan], id="a value that is not a number"),
+            pytest.param([12.0, 41.0, 13.0, 95.0], id="a latitude above 90"),
+            pytest.param([12.0, -91.0, 13.0, 41.0], id="a latitude below -90"),
+            pytest.param([12.0, 41.0, 13.0, 40.0], id="a north below the south"),
+        ],
+    )
+    def test_a_malformed_footprint_is_not_a_footprint(self, footprint: list[float]) -> None:
+        assert footprint_boxes(footprint) is None
+
+    @pytest.mark.parametrize(
+        "footprint",
+        [
+            pytest.param([11.0, 41.0, 12.35, 43.0], id="its east edge on the request's west"),
+            pytest.param([12.65, 41.0, 14.0, 43.0], id="its west edge on the request's east"),
+            pytest.param([11.0, 40.0, 14.0, 41.78], id="its north edge on the request's south"),
+            pytest.param([11.0, 42.0, 14.0, 43.0], id="its south edge on the request's north"),
+        ],
+    )
+    def test_a_footprint_that_touches_the_request_box_on_an_edge_is_kept(
+        self, footprint: list[float]
+    ) -> None:
+        # The request box is west=12.35, south=41.78, east=12.65, north=42.0: a shared edge is an overlap.
+        item = raw_item(bbox=footprint)
+        scene = summarise(item, Product.SENTINEL_2_L2A, S2)
+        assert scene is not None
+        assert matches(scene, item, ROME_JULY_CLOUD_10)
 
     def test_times_are_compared_in_utc(self) -> None:
         # 23:30 at UTC-2 on 31 July is 1 August in UTC, so it is outside a July search.

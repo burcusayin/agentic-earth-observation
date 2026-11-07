@@ -103,7 +103,7 @@ class RetrievalExecutor(AgentExecutor):
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         # The SDK calls this while the event queue is still open, then cancels `execute`; it closes the task
-        # as canceled itself if this did not. The orchestrator never cancels a turn.
+        # as cancelled itself if this did not. The orchestrator never cancels a turn.
         await TaskUpdater(event_queue, context.task_id or "", context.context_id or "").cancel()
 
 

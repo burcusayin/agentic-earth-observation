@@ -29,8 +29,11 @@ test: ## Run unit and contract tests with coverage (no network, no models)
 
 check: lint format-check typecheck test ## Everything CI runs; must pass before a task is called done
 
-hooks: ## Run every pre-commit hook on all files
+hooks: ## Run every pre-commit hook on all files (the secret scan looks at staged changes: see `secrets`)
 	$(UV) run pre-commit run --all-files
+
+secrets: ## Scan the whole git history for secrets, as CI does
+	$(UV) run pre-commit run --hook-stage manual gitleaks-history --all-files
 
 serve-mcp: ## Run the catalogue MCP server on http://127.0.0.1:8001/mcp (Ctrl+C to stop)
 	$(UV) run python -m agentic_earth_observation.catalog_mcp.server

@@ -110,7 +110,12 @@ async def test_preparing_loads_the_model_with_the_context_and_gives_its_build() 
     assert loaded == LoadedModel(model="qwen3.5:9b", digest=QWEN["digest"], context_length=CONTEXT)
     assert ollama.loaded == {"qwen3.5:9b": CONTEXT}
     (load,) = [body for method, path, body in ollama.requests if path == "/api/generate"]
-    assert load == {"model": "qwen3.5:9b", "keep_alive": OLLAMA_KEEP_ALIVE, "options": {"num_ctx": CONTEXT}}
+    assert load == {
+        "model": "qwen3.5:9b",
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {"num_ctx": CONTEXT},
+        "stream": False,
+    }
 
 
 async def test_preparing_unloads_every_other_model_first() -> None:
@@ -119,7 +124,7 @@ async def test_preparing_unloads_every_other_model_first() -> None:
         await server.prepare("qwen3.5:9b", CONTEXT)
     assert ollama.loaded == {"qwen3.5:9b": CONTEXT}
     generated = [body for method, path, body in ollama.requests if path == "/api/generate"]
-    assert generated[0] == {"model": "ministral-3:8b", "keep_alive": 0}
+    assert generated[0] == {"model": "ministral-3:8b", "keep_alive": 0, "stream": False}
     assert generated[1]["model"] == "qwen3.5:9b"
 
 
@@ -199,7 +204,9 @@ async def test_unloading_asks_for_no_keep_alive() -> None:
     async with ollama.server() as server:
         await server.unload("qwen3.5:9b")
     assert ollama.loaded == {}
-    assert ollama.requests == [("POST", "/api/generate", {"model": "qwen3.5:9b", "keep_alive": 0})]
+    assert ollama.requests == [
+        ("POST", "/api/generate", {"model": "qwen3.5:9b", "keep_alive": 0, "stream": False})
+    ]
 
 
 async def test_a_model_the_server_does_not_have_is_reported_with_its_words() -> None:

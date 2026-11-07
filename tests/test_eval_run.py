@@ -301,6 +301,7 @@ class FakeServers:
         self.dead: str | None = None  # from `dies_at_check` on, check() raises ServerDied with this message
         self.dies_at_check = 1
         self.restart_fails: str | None = None
+        self.restarts_that_work: int | None = None  # with restart_fails: how many succeed before it applies
         self.on_check: Callable[[int], None] | None = None  # called with the number of the check
         self.checks = 0
         self.restarts = 0
@@ -326,9 +327,15 @@ class FakeServers:
 
     async def restart_agent(self) -> None:
         self.check()
-        if self.restart_fails is not None:
+        if self.restart_fails is not None and self.restarts >= (self.restarts_that_work or 0):
             raise ServerError(self.restart_fails)
         self.restarts += 1
+
+
+def replacements_that_work(run: Run, count: int) -> None:
+    """The first `count` replacements of the agent succeed; the next finds the port taken."""
+    run.servers.restart_fails = "something already answers on port 8002"
+    run.servers.restarts_that_work = count
 
 
 class FakeModelServer:
@@ -398,6 +405,8 @@ def running_record(tasks: tuple[Task, ...], model: str = MODEL) -> RunRecord:
             tool_descriptions=A_HASH,
             golden=A_HASH,
             evaluation_code=A_HASH,
+            gazetteer=A_HASH,
+            evaluation_rules=A_HASH,
         ),
         reference_date=REFERENCE_DATE,
         shuffle_seed=1,
@@ -427,6 +436,7 @@ class Run:
         self.servers = FakeServers()
         self.catalog = catalog or FakeCatalog()
         self.lines: list[str] = []
+        self.say: Callable[[str], None] = self.lines.append  # a test may replace it
         self.orchestrator: ScriptedOrchestrator | None = None
         self.code: Callable[[], CodeVersion] = lambda: COMMIT
 
@@ -440,7 +450,7 @@ class Run:
             self.orchestrator,
             self.catalog,
             code=lambda: self.code(),
-            say=self.lines.append,
+            say=self.say,
         )
 
     def turns(self) -> list[tuple[str, str, str]]:
@@ -828,6 +838,53 @@ class TestInfrastructure:
         abandoned.cancel()
         await asyncio.wait({abandoned})
 
+    async def test_the_time_of_a_turn_past_the_harness_timeout_leaves_out_the_cancel_grace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The grace is the runner's wait for the turn to end, not time the model spent.
+        monkeypatch.setattr(run_eval, "CANCEL_GRACE_S", 2.0)
+        script = passing_script()
+        script[MILAN] = [Step(hangs=True, swallows_cancellation=True), *script[MILAN]]
+        run = Run(tmp_path, config=settings(**QUICK))
+        await run.go(script)
+        (turn,) = run.attempts()[0].turns
+        assert 0.3 <= turn.seconds < 1.0
+        assert run.orchestrator is not None
+        for abandoned in run.orchestrator.abandoned:
+            abandoned.cancel()
+        await asyncio.wait(set(run.orchestrator.abandoned))
+
+    async def test_a_task_lost_on_its_last_attempt_is_counted_even_when_the_agent_cannot_be_replaced(
+        self, tmp_path: Path
+    ) -> None:
+        # The agent is replaced after each of the task's first two attempts, and again after the task is
+        # lost. That third replacement fails: the task ended before it, so it is in the count.
+        script = passing_script()
+        script[MILAN] = [Step(UNREACHABLE)]
+        run = Run(tmp_path)
+        replacements_that_work(run, 2)
+        final = await run.go(script)
+        assert (final.status, final.aborted_reason) == ("aborted", "something already answers on port 8002")
+        assert final.tasks == TaskCounts(lost=1)
+        assert run.written().tasks == final.tasks
+        assert [a.outcome for a in run.attempts()] == ["infrastructure"] * 3
+
+    async def test_the_third_task_lost_is_the_abort_reason_whatever_the_replacement_does(
+        self, tmp_path: Path
+    ) -> None:
+        # Two replacements per lost task before the count; the third task's own is never asked for.
+        script = passing_script()
+        for text in (MILAN, GERMAN, WEATHER):
+            script[text] = [Step(UNREACHABLE)]
+        run = Run(tmp_path)
+        replacements_that_work(run, 8)
+        final = await run.go(script)
+        assert final.tasks == TaskCounts(passed=1, lost=3)
+        assert final.aborted_reason == (
+            "3 tasks were lost to the infrastructure; the last: turn 1: A2A ReadTimeout"
+        )
+        assert run.servers.restarts == 8
+
     async def test_a_turn_past_the_harness_timeout_keeps_the_calls_it_made(self, tmp_path: Path) -> None:
         script = passing_script()
         script[MILAN] = [Step(hangs=True, calls=[call("resolve_place", 1, name="Milan")]), *script[MILAN]]
@@ -1018,6 +1075,45 @@ class TestAborted:
         run = Run(tmp_path)
         with pytest.raises(ValueError, match="not a tool-call record"):
             await run.go(script)
+
+    @pytest.mark.parametrize("dead_server", [None, "the MCP server exited with code 1 during the run"])
+    async def test_a_final_record_that_cannot_be_written_is_said_with_the_counts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dead_server: str | None
+    ) -> None:
+        # The attempts are on disk and run.json still says `running`: the message says so, with what the
+        # run came to, instead of a bare traceback.
+        def full_disk(folder: Path, record: RunRecord) -> None:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(run_eval, "write_run_record", full_disk)
+        run = Run(tmp_path)
+        if dead_server:
+            run.servers.dead, run.servers.dies_at_check = dead_server, 2
+        with pytest.raises(EvaluationError) as raised:
+            await run.go(passing_script())
+        said = str(raised.value)
+        assert said.startswith(f"run {RUN_ID} ended ({'aborted' if dead_server else 'complete'}; ")
+        assert ("1 passed" if dead_server else "4 passed") in said
+        assert "could not be written: OSError: No space left on device" in said
+        assert said.endswith(f"Its attempts are in {run.folder.name}; run.json still says running")
+        assert len(run.attempts()) == (1 if dead_server else 4)
+
+    async def test_a_record_written_before_a_failing_print_is_not_reported_as_unwritten(
+        self, tmp_path: Path
+    ) -> None:
+        # The run's last line goes to a closed pipe (`... | head`): the record is on disk and says so.
+        run = Run(tmp_path)
+
+        def closed_pipe(line: str) -> None:
+            if line.startswith("run "):
+                raise BrokenPipeError(32, "Broken pipe")
+            run.lines.append(line)
+
+        run.say = closed_pipe
+        with pytest.raises(BrokenPipeError):
+            await run.go(passing_script())
+        assert run.written().status == "complete"
+        assert run.written().tasks == TaskCounts(passed=4)
 
     async def test_a_checkout_that_changes_is_noted_on_a_run_that_aborted_anyway(
         self, tmp_path: Path
@@ -1313,16 +1409,33 @@ class TestEvaluate:
         (scratch,) = await world.evaluate(models=[MODEL], runs=1)
         assert scratch.status == "complete"
 
-    @pytest.mark.parametrize("constant", ["FROZEN_GOLDEN", "FROZEN_EVALUATION_CODE"])
+    @pytest.mark.parametrize(
+        ("constant", "named"),
+        [
+            ("FROZEN_TEST_SPLIT", "changed since: the test split[.]"),
+            ("FROZEN_EVALUATION_CODE", "changed since: the evaluation code[.]"),
+            ("FROZEN_GAZETTEER", "changed since: the gazetteer[.]"),
+            ("FROZEN_EVALUATION_RULES", "changed since: the labelling rules[.]"),
+        ],
+    )
     async def test_a_run_for_the_report_needs_the_frozen_files_as_they_were_frozen(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, constant: str
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, constant: str, named: str
     ) -> None:
         monkeypatch.setattr(run_eval, constant, "0" * 64)
         world = World(tmp_path, passing_script())
-        with pytest.raises(EvaluationError, match="differs from tag golden-test-v1"):
+        with pytest.raises(EvaluationError, match=rf"frozen at tag golden-test-v1 and {named}"):
             await world.evaluate(models=[MODEL], runs=1, for_report=True)
         (scratch,) = await world.evaluate(models=[MODEL], runs=1)
         assert scratch.status == "complete"
+
+    async def test_several_changed_frozen_files_are_all_named(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(run_eval, "FROZEN_GAZETTEER", "0" * 64)
+        monkeypatch.setattr(run_eval, "FROZEN_EVALUATION_RULES", "0" * 64)
+        world = World(tmp_path, passing_script())
+        with pytest.raises(EvaluationError, match=r"changed since: the gazetteer, the labelling rules[.]"):
+            await world.evaluate(models=[MODEL], runs=1, for_report=True)
 
     async def test_another_ollama_version_is_named_on_the_screen(self, tmp_path: Path) -> None:
         world = World(tmp_path, passing_script())

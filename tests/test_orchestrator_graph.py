@@ -40,6 +40,7 @@ from tests.fakes import (
     MID_STREAM,
     NEVER_FINISHES,
     SCENE,
+    BrokenModel,
     FakeClient,
     FakeOllama,
     OllamaError,
@@ -313,6 +314,16 @@ class TestDecisionFailures:
         assert 0.3 <= elapsed < 0.3 + 0.5  # enforced, and on time
         assert (out.decision_usage.model_calls, client.calls) == (1, [])
         assert 0.3 <= out.decision_usage.seconds <= elapsed
+
+    async def test_a_timeout_the_model_client_raises_before_the_deadline_is_reported_as_its_own(self) -> None:
+        # The deadline did not expire, so the error is the model client's: infrastructure, reported as what
+        # it was, never as the decision running past its deadline.
+        client = FakeClient()
+        model = BrokenModel(messages=iter([]), bug=TimeoutError("the model client gave up waiting"))
+        orch = Orchestrator(model, client, MODEL_ID, decision_deadline_s=150.0)
+        out = await orch.run_turn("conv-1", "Something", "turn-1", TODAY)
+        assert out.infra_error == "TimeoutError: the model client gave up waiting"
+        assert (out.failure, out.route, out.status, client.calls) == (None, Route.DECLINE, "declined", [])
 
     async def test_a_model_the_server_does_not_have_is_raised(self) -> None:
         orch, _ = orchestrator([OllamaError(404, 'model "qwen3.5:9b" not found')], FakeClient())

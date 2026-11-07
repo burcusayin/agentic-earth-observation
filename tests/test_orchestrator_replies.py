@@ -108,6 +108,15 @@ class TestCitingNothing:
         assert "Milan" in text
         assert "Naples" in text
 
+    def test_each_clarification_asks_for_what_is_missing(self) -> None:
+        asks_for_place = compose_reply("clarify", "missing_place", None, None, None).text.lower()
+        assert "place" in asks_for_place
+        assert "date" not in asks_for_place
+        assert "period" not in asks_for_place
+        asks_for_period = compose_reply("clarify", "missing_period", None, None, None).text.lower()
+        assert "date" in asks_for_period or "period" in asks_for_period
+        assert "place" not in asks_for_period
+
 
 class TestPrecedence:
     """The first rule that applies decides the reply."""

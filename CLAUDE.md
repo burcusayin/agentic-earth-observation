@@ -41,7 +41,8 @@ make setup     # .venv from uv.lock (uv-managed Python 3.13) and the pre-commit 
 make check     # lint, format check, mypy --strict, tests with coverage; must pass before a task is done
 make test      # tests only; for one test: uv run pytest tests/test_scoring.py::test_name
 make format    # ruff format
-make hooks     # every pre-commit hook on every file, including gitleaks and the private-strings check
+make hooks     # every pre-commit hook on every file; the private-files check, and gitleaks on staged changes
+make secrets   # gitleaks over the whole history, as CI runs it
 make eval-smoke  # one local run over the dev split: free, needs Ollama
 ```
 

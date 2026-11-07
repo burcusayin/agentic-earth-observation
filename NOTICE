@@ -11,7 +11,7 @@ data/gazetteer.json
   https://www.openstreetmap.org/copyright. This file is made available under the Open Database License (ODbL)
   1.0: https://opendatacommons.org/licenses/odbl/1-0/. Tests and scripts repeat a few of its boxes.
 
-tests/cassettes/
+tests/ (the recorded responses under tests/cassettes/, and scene identifiers repeated in tests)
   Contains modified Copernicus Sentinel data (2025): scene metadata (identifiers, acquisition times, cloud
   cover, platform and footprints of Sentinel-1 and Sentinel-2 scenes), retrieved on 2026-10-30 from the
   Earth Search STAC API by Element 84 (https://earth-search.aws.element84.com/v1) and trimmed to the fields

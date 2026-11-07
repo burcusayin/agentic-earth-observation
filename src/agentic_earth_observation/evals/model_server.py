@@ -101,7 +101,12 @@ class OllamaServer:
             "POST",
             "/api/generate",
             _Generated,
-            json={"model": model, "keep_alive": OLLAMA_KEEP_ALIVE, "options": {"num_ctx": context}},
+            json={
+                "model": model,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+                "options": {"num_ctx": context},
+                "stream": False,  # one JSON answer, whatever a future version streams for an empty prompt
+            },
             timeout=LOAD_TIMEOUT_S,
         )
         loaded = [m for m in await self._loaded() if m.model == model]
@@ -115,7 +120,9 @@ class OllamaServer:
         return LoadedModel(model=model, digest=loaded[0].digest, context_length=loaded[0].context_length)
 
     async def unload(self, model: str) -> None:
-        await self._ask("POST", "/api/generate", _Generated, json={"model": model, "keep_alive": 0})
+        await self._ask(
+            "POST", "/api/generate", _Generated, json={"model": model, "keep_alive": 0, "stream": False}
+        )
 
     async def _loaded(self) -> list[_Model]:
         return (await self._ask("GET", "/api/ps", _Models)).models

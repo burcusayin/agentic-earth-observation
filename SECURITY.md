@@ -8,8 +8,8 @@ public catalogue (Earth Search by default) and a local model server (Ollama).
 
 Please report a vulnerability privately, through
 [GitHub's private reporting](https://github.com/burcusayin/agentic-earth-observation/security/advisories/new),
-rather than in a public issue. This is a personal project with no guaranteed response time; I will answer as soon
-as I can.
+rather than in a public issue. This is a personal project with no guaranteed response time; the maintainer answers
+as soon as possible.
 
 Useful things to report: a way for a catalogue's answer, a tool result or a user's text to make a server act
 beyond its tools, to reach another service, or to get a fabricated scene into an answer.

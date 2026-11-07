@@ -16,7 +16,6 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 from pystac import STACError
@@ -24,7 +23,9 @@ from pystac_client import Client
 from pystac_client.errors import ClientTypeError
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
+from pystac_client.warnings import DoesNotConformTo
 from requests import Request
+from urllib3.util import parse_url
 from urllib3.util.retry import Retry
 
 from agentic_earth_observation.domain import BBox, Product, SearchRequest
@@ -118,10 +119,15 @@ def retry_policy(max_retries: int) -> Retry:
     )
 
 
-def _origin(url: str) -> tuple[str, str | None, int | None]:
-    """The scheme, host and port of a URL, with the scheme's default port filled in."""
-    parts = urlsplit(url)
-    return parts.scheme, parts.hostname, parts.port or {"http": 80, "https": 443}.get(parts.scheme)
+def _origin(url: str) -> tuple[str | None, str | None, int | None, str | None]:
+    """The scheme, host, port and user information of a URL, read by urllib3, which is what sends the request.
+
+    `urllib.parse` reads some URLs differently (a backslash before an `@`, for one), so a check made with it
+    could pass a URL that then goes elsewhere.
+    """
+    parts = parse_url(url)
+    port = parts.port or {"http": 80, "https": 443}.get(parts.scheme or "")
+    return parts.scheme, parts.host, port, parts.auth
 
 
 def only_to(url: str) -> Callable[[Request], None]:
@@ -134,7 +140,9 @@ def only_to(url: str) -> Callable[[Request], None]:
     allowed = _origin(url)
 
     def check(request: Request) -> None:
-        if _origin(str(request.url)) != allowed:
+        *origin, auth = _origin(str(request.url))
+        # A link may carry no user information, or the configured URL's own; never another.
+        if origin != list(allowed[:3]) or auth not in (None, allowed[3]):
             raise ValueError(f"refused a link away from the configured catalogue: {request.url!s}")
 
     return check
@@ -208,8 +216,12 @@ class StacCatalog:
         except _CATALOGUE_FAILURES as err:
             raise _failure(what, err) from err
         # Outside the `try`s: this only checks our own parameters, so an error here is a bug of ours, which
-        # must not be taken for a failure of the catalogue.
-        search = client.search(fields=_FIELDS, **params)
+        # must not be taken for a failure of the catalogue. The one exception is a catalogue whose landing
+        # page no longer declares item search: that is the catalogue's doing.
+        try:
+            search = client.search(fields=_FIELDS, **params)
+        except DoesNotConformTo as err:
+            raise _failure(what, err) from err
         try:
             items = list(search.items_as_dicts())
         except _CATALOGUE_FAILURES as err:
@@ -220,7 +232,7 @@ class StacCatalog:
 def _failure(what: str, err: Exception) -> CatalogError:
     """The error for a failed call: the catalogue's own text is logged, never passed on."""
     status = getattr(err, "status_code", None)
-    logger.warning("%s failed: %s: %.300s", what, type(err).__name__, err)
+    logger.warning("%s failed: %s: %.300r", what, type(err).__name__, str(err))  # %r: one line in the log
     detail = f" (HTTP {status})" if status else ""
     message = f"{what} failed: the catalogue did not answer correctly{detail}"
     # 408 and 429 are the catalogue's load, not our request; the retries have already been spent on them.

@@ -33,6 +33,7 @@ from typing import Any, Literal, Protocol
 
 from langchain_core.language_models import BaseChatModel
 
+from agentic_earth_observation.catalog.gazetteer import DEFAULT_PATH as GAZETTEER_PATH
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog.stac import CatalogError, CatalogRefused, StacCatalog
 from agentic_earth_observation.catalog_mcp.server import Catalog
@@ -45,12 +46,12 @@ from agentic_earth_observation.evals.golden import (
     ExpectedSearch,
     Task,
     evaluation_code_hash,
-    golden_hash,
     load_golden,
 )
 from agentic_earth_observation.evals.model_server import ModelServer, ModelServerError, OllamaServer
 from agentic_earth_observation.evals.outcome import task_passed, turn_outcome, turn_trace
 from agentic_earth_observation.evals.records import (
+    EVALUATION_RULES,
     MAX_ATTEMPTS,
     OUTPUT_FOLDER,
     RAW_RUNS,
@@ -68,6 +69,7 @@ from agentic_earth_observation.evals.records import (
     Value,
     append_attempt,
     code_version,
+    file_hash,
     hashes,
     library_versions,
     new_run_id,
@@ -91,10 +93,13 @@ RETRY_PAUSE_S = 30.0  # before a task is tried again, so that a short outage doe
 # docs/evaluation.md: every expected search returned scenes when checked, except the one "no results" task.
 # More than this means the catalogue or the client changed, and every search would score as "none found".
 EMPTY_SEARCH_TASKS = 1
-# The frozen files as of tag golden-test-v1 (tests/test_golden.py checks them too). A fix to them needs a
-# dated decision and a new tag, and then these.
-FROZEN_GOLDEN = "743d5e2abb5db223099b2b6f37c73fbdc503b80c745d4a456e999003b5ed9bc7"
+# The frozen files at tag golden-test-v1 (docs/evaluation.md, "What is frozen"; tests/test_golden.py checks
+# them too). A fix to one needs a dated decision and a new tag, and then its constant. The dev split is not
+# frozen: the record's golden hash covers both splits, the check here only the test split.
+FROZEN_TEST_SPLIT = "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784"
 FROZEN_EVALUATION_CODE = "72d140b004d9a42eaa017ea53db68334407cea46a82b5d4b871ff45d94c3b9cb"
+FROZEN_GAZETTEER = "af181e26cb48c0631f8e3e70bbe71aa7ef2e12d59b1bae0f1b141d76f842d91e"
+FROZEN_EVALUATION_RULES = "9f3ae9ba0643eebc8082a4b6dc549224fc5674a85af3fa8d75f18ca3f10abb5b"
 DEFAULT_RUNS = 3
 DEFAULT_SHUFFLE_SEED = 1  # one order for every run of every model
 ORACLE_LIMIT = 50  # the oracle query's limit when the task asks for no number of scenes
@@ -111,7 +116,11 @@ class Aborted(Exception):
 
 
 class HarnessTimeout(Exception):
-    """A turn ran past the harness timeout."""
+    """A turn ran past the harness timeout. `seconds`: how long it ran before it was cancelled."""
+
+    def __init__(self, limit_s: float, seconds: float) -> None:
+        super().__init__(f"the turn ran past the harness timeout ({limit_s:g} s)")
+        self.seconds = seconds
 
 
 class Servers(Protocol):
@@ -285,10 +294,16 @@ def _ready_for_the_report(services: Services) -> None:
             f"{OUTPUT_FOLDER}/{REPORTED_RUNS} holds runs that are not committed: commit them first, "
             "so that every run for the report stays on record"
         )
-    if golden_hash() != FROZEN_GOLDEN or evaluation_code_hash() != FROZEN_EVALUATION_CODE:
+    frozen = {
+        "the test split": (file_hash(services.golden_dir / "test.jsonl"), FROZEN_TEST_SPLIT),
+        "the evaluation code": (evaluation_code_hash(), FROZEN_EVALUATION_CODE),
+        "the gazetteer": (file_hash(GAZETTEER_PATH), FROZEN_GAZETTEER),
+        "the labelling rules": (file_hash(EVALUATION_RULES), FROZEN_EVALUATION_RULES),
+    }
+    if changed := [name for name, (now, then) in frozen.items() if now != then]:
         raise EvaluationError(
-            "the golden set or the evaluation code differs from tag golden-test-v1: a fix to them needs a "
-            "dated decision and a new tag"
+            f"frozen at tag golden-test-v1 and changed since: {', '.join(changed)}. A fix to a frozen file "
+            "needs a dated decision and a new tag"
         )
 
 
@@ -419,16 +434,18 @@ async def _tasks(run: _Running) -> None:
             run.say(_line(position, len(run.plan.tasks), attempt))
             if attempt.outcome != "infrastructure":
                 break
-            # The agent may still be at the turn its client gave up on, holding the model: a new one is ready
-            # in under a second (decision of 2026-11-07).
-            await _fresh_agent(run.servers)
+            if number < MAX_ATTEMPTS:
+                # The agent may still be at the turn its client gave up on, holding the model: a new one is
+                # ready in under a second (decision of 2026-11-07).
+                await _fresh_agent(run.servers)
+        # Counted before anything else can fail: a task that ended is in the record whatever happens next.
         _count(attempt, run)
-        if attempt.outcome == "errored":
-            if run.tasks["errored"] >= ERRORED_LIMIT:
-                raise Aborted(f"{ERRORED_LIMIT} tasks errored")
-            await _fresh_agent(run.servers)
+        if attempt.outcome == "errored" and run.tasks["errored"] >= ERRORED_LIMIT:
+            raise Aborted(f"{ERRORED_LIMIT} tasks errored")
         if run.tasks["lost"] >= LOST_LIMIT:
             raise Aborted(f"{LOST_LIMIT} tasks were lost to the infrastructure; the last: {attempt.reason}")
+        if attempt.outcome != "scored":  # errored, or lost: the agent may be stuck at the last turn
+            await _fresh_agent(run.servers)
 
 
 def _count(attempt: AttemptRecord, run: _Running) -> None:
@@ -459,7 +476,7 @@ async def _attempt(task: Task, conversation: str, number: int, run: _Running) ->
             )
         except HarnessTimeout as err:
             outcome, reason = "infrastructure", str(err)
-            seconds = time.perf_counter() - started
+            seconds = err.seconds
             calls = read_tool_calls(run.log, trace_id)
             turns.append(TurnRecord(trace_id=trace_id, seconds=seconds, error=reason, calls=calls))
             break
@@ -521,16 +538,18 @@ async def _bounded(turn: Coroutine[Any, Any, TurnOutput], limit_s: float) -> Tur
     return late (decision of 2026-11-06). A turn past the limit is cancelled and gets a moment to end.
     """
     task = asyncio.ensure_future(turn)
+    started = time.perf_counter()
     try:
         done, _ = await asyncio.wait({task}, timeout=limit_s)
     except asyncio.CancelledError:  # the run itself is cancelled (Ctrl+C): the turn goes with it
         task.cancel()
         raise
     if not done:
+        seconds = time.perf_counter() - started  # the turn's own time: the grace below is the runner's
         task.add_done_callback(_outcome_not_needed)
         task.cancel()
         await asyncio.wait({task}, timeout=CANCEL_GRACE_S)
-        raise HarnessTimeout(f"the turn ran past the harness timeout ({limit_s:g} s)")
+        raise HarnessTimeout(limit_s, seconds)
     if task.cancelled():  # nobody here asked for it, so this is not an interruption of the run
         raise RuntimeError("the turn ended as cancelled, though nothing cancelled it")
     return task.result()
@@ -642,8 +661,14 @@ def _ended(run: _Running, status: Literal["complete", "aborted"], reason: str | 
             "tasks": TaskCounts(**run.tasks),
         }
     )
-    write_run_record(run.folder, final)
     counts = ", ".join(f"{run.tasks[what]} {what}" for what in ("passed", "failed", "errored", "lost"))
+    try:
+        write_run_record(run.folder, final)
+    except OSError as err:  # the attempts are on disk and run.json still says `running`: say so, with counts
+        raise EvaluationError(
+            f"run {run.record.run_id} ended ({status}; {counts}) but its record could not be written: "
+            f"{describe(err)}. Its attempts are in {run.folder.name}; run.json still says running"
+        ) from err
     run.say(f"run {run.record.run_id}: {counts}" + (f"; aborted: {reason}" if status == "aborted" else ""))
     return final
 

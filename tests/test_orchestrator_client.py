@@ -21,7 +21,17 @@ from a2a.helpers.proto_helpers import new_data_part
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types.a2a_pb2 import AgentCard, Message, Part, Role, Task, TaskState, TaskStatus
+from a2a.types.a2a_pb2 import (
+    AgentCard,
+    Artifact,
+    Message,
+    Part,
+    Role,
+    StreamResponse,
+    Task,
+    TaskState,
+    TaskStatus,
+)
 from a2a.utils.errors import InternalError
 from langchain_core.language_models import BaseChatModel
 
@@ -30,10 +40,12 @@ from agentic_earth_observation.orchestrator.client import (
     A2ARetrievalClient,
     RetrievalAgentError,
     RetrievalClient,
+    _result,
 )
 from agentic_earth_observation.retrieval_agent import a2a_server
 from agentic_earth_observation.retrieval_agent.a2a_server import RetrievalExecutor, build_app
 from agentic_earth_observation.retrieval_agent.models import (
+    RESULT_ARTIFACT,
     Clarification,
     PreviousSearch,
     RetrievalRequest,
@@ -354,6 +366,21 @@ class TestAnswers:
         async with agent(AnswersWithMessage()) as (client, _):
             with pytest.raises(RetrievalAgentError, match="answered turn turn-1 without a task"):
                 await client.retrieve(REQUEST, "turn-1")
+
+    def test_two_answers_to_one_turn_are_outside_the_contract(self) -> None:
+        # The client never streams, so the SDK hands it exactly one answer; the check on their number is the
+        # contract's own and is reached directly, with two completed tasks that would each be valid alone.
+        completed = Task(
+            id="task-1",
+            context_id="conv-1",
+            status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+            artifacts=[
+                Artifact(artifact_id="a-1", name=RESULT_ARTIFACT, parts=[json_text(FOUND.model_dump_json())])
+            ],
+        )
+        assert _result([StreamResponse(task=completed)], "turn-1") == FOUND
+        with pytest.raises(RetrievalAgentError, match="answered turn turn-1 2 times, not once"):
+            _result([StreamResponse(task=completed), StreamResponse(task=completed)], "turn-1")
 
     @pytest.mark.parametrize("trace_id", ["", "turn 1", "turn-1\n", "a" * 65, "run-3/turn-1"])
     async def test_a_malformed_trace_id_is_refused_before_anything_is_sent(self, trace_id: str) -> None:

@@ -8,7 +8,8 @@ milestone is fixed (see the roadmap in the [README](README.md)).
 ```bash
 make setup
 make check   # lint, format check, mypy --strict, tests with coverage; no network, no models
-make hooks   # every commit check, including the secret scan
+make hooks   # every commit check
+make secrets # the secret scan of the whole history, as CI runs it
 ```
 
 Tests make no network or model calls by default. Tests marked `integration` need local servers and Ollama;

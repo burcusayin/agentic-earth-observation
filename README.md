@@ -36,7 +36,7 @@ catalogue MCP server  -->  Earth Search STAC API (Sentinel-1 and Sentinel-2 scen
 ```
 
 The three parts run as separate processes, so each boundary is a real protocol boundary rather than a function
-call. Only scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0.1` only.
+call. The catalogue speaks STAC, the SpatioTemporal Asset Catalog API for satellite scene metadata. Only scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0.1` only.
 
 ## Evaluation
 
@@ -89,7 +89,7 @@ make serve-agent  # in a second terminal: the retrieval agent over A2A on http:/
 uv run eo-agent chat   # in a third terminal: talk to the assistant (both servers and Ollama running)
 uv run python -m agentic_earth_observation.retrieval_agent "<a question>"   # one question, through MCP
 uv run python -m agentic_earth_observation.evals.golden   # validate the golden set and print its hash
-make eval-smoke   # the evaluation on the dev split: starts its own servers; needs only Ollama, about 2 minutes
+make eval-smoke   # the evaluation on the dev split: starts its own servers; needs Ollama and Earth Search, ~2 min
 ```
 
 The dev split is for trying things: `uv run eo-agent eval --split dev --models qwen3.5:9b --runs 1` writes one
@@ -125,6 +125,7 @@ rules and safeguards are committed so they can be reviewed:
   - Pushing, opening pull requests, changing dependencies, re-recording HTTP fixtures and live tests need
     approval.
   - Reading `.env` and key files, force-pushing, skipping hooks and merging are refused.
+  - A hook formats every Python file Claude Code writes, with `ruff format`.
   - The deny rules match command patterns, so they are a safeguard, not a sandbox. The approval required for
     every push is the real control.
 - **Commit checks ([`.pre-commit-config.yaml`](.pre-commit-config.yaml)):** formatting, lint, types, secret
@@ -144,11 +145,12 @@ Bug reports and fixes are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md) and 
 - [x] Catalogue MCP server, validated and tested against recorded catalogue responses.
 - [x] Golden set and scoring, frozen.
 - [x] Retrieval agent and orchestrator, connected over A2A.
-- [ ] Evaluation of two local models (Ollama) and two Mistral API models, three runs each, with latency and cost
-  per task.
+- [ ] Evaluation of two local models (Ollama), three runs each, with latency per task. The two Mistral API models
+  first planned here moved to the follow-up milestones (decision of 2026-11-05).
 
 **Follow-up milestones (planned):**
 - **Evaluation rigour:**
+  - Two Mistral API models next to the local ones, with cost per task.
   - A recorded local catalogue for fully offline runs.
   - Fault injection (timeouts, server errors, rate limits).
   - About 50 tasks.

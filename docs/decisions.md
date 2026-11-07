@@ -517,3 +517,42 @@ and the first real runs on the dev split. What came of them:
   - Two latent defects in the frozen files: `golden.py` requires `search_scenes` for any expected search, so another
     accepted route could never pass, and `scoring.py` accepts any status on a turn with no search and no
     `outcomes`. A check that prints only counts finds no such turn in either split, so no score changes.
+
+A full audit the same evening, by five more read-only sessions (the plan against the code, the runner, the
+agents and catalogue, the tests with 55 planted bugs, and a stranger's reading for public release). What it
+changed:
+
+- **A task lost on its third attempt is counted before the agent is replaced.** The replacement came first, and
+  one that failed (the port taken) ended the run with the task in `attempts.jsonl` but in no count, and with the
+  replacement's reason in place of "3 tasks were lost". The order is now: count, the two limits, then the
+  replacement; a task's last attempt is never followed by a replacement that only the next task would use.
+- **A run for the report checks all four frozen files,** and every run record names them: `data/gazetteer.json`
+  decides every expected box and the oracle's query, and `docs/evaluation.md` holds the rules. Only the golden set
+  and the evaluation code were checked before. Records written earlier lack the two hashes and no longer read; all
+  of them were scratch runs on the dev split. The golden hash covers both splits, so a change to the dev split
+  also fails the check until `FROZEN_GOLDEN` is updated in the same commit: the dev split is part of what a
+  report describes.
+- **A final record that cannot be written is said with the counts,** instead of a bare traceback leaving `run.json`
+  at `running` with every attempt on disk.
+- **The time of a turn past the harness timeout is the turn's own,** without the up to 5 s the runner then waits
+  for it to end.
+- **Two more messages of Ollama's own trouble count as infrastructure:** "process has terminated" (a runner that
+  exited with a code, where "no longer running" is one killed by a signal) and "no slots available", both from the
+  0.40.1 binary.
+- **The catalogue guard reads a link as urllib3 does,** which sends the request. `urllib.parse` takes the host
+  after the last `@`, urllib3 stops at a backslash: `https://evil.example\@catalogue/...` passed the old check and
+  would have gone to `evil.example`. pystac normalised the backslash away before the check, so the guard held by
+  luck; it now also compares the user information in the URL.
+- **A catalogue whose landing page no longer declares item search is a failed catalogue,** not a bug of ours:
+  pystac-client raises it from `search()`, next to the errors in our own parameters.
+- **Known limitations for the write-up,** recorded now:
+  - the frozen `score_arguments` reads a bbox of numbers written as text, which the server refuses, so a refused
+    first call can still pass first-call accuracy on its box; the other arguments are compared by type or value;
+  - the "start date in the future" check uses the machine's clock, not the agents' `today`; the reference date of
+    the golden set is in the past and no task asks for a future date, so no score changes;
+  - a 401 or 403 from the catalogue's front door counts as a refused request of ours (above), and would end a run
+    after three tasks, which is the right outcome for a block that a person must look at;
+  - the oracle's recall is over the scenes of the turn's last successful search, the only ones the answer cites.
+- **The pre-check of the golden texts against `RetrievalRequest`** promised on 2026-11-05 is a test, not a step of
+  the run: a task's text is at most 1,000 characters and the request accepts 2,000, so the check cannot fail at run
+  time.

@@ -13,6 +13,7 @@ docs/decisions.md (2026-11-02 and 2026-11-05).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
@@ -26,6 +27,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from agentic_earth_observation.catalog.gazetteer import DEFAULT_PATH as GAZETTEER_PATH
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, ToolCallRecord
 from agentic_earth_observation.config import ROOT, Settings
 from agentic_earth_observation.evals.golden import evaluation_code_hash, golden_hash
@@ -41,6 +43,7 @@ MAX_ATTEMPTS = 3  # the first try, and two more after infrastructure failures (d
 OUTPUT_FOLDER = "results"  # what runs write; it does not make the checkout "dirty"
 RAW_RUNS = "raw"  # results/raw: scratch runs, not tracked
 REPORTED_RUNS = "runs"  # results/runs: runs for the report, from a clean checkout only
+EVALUATION_RULES = ROOT / "docs" / "evaluation.md"  # the labelling rules and the scoring, frozen
 
 RunStatus = Literal["running", "complete", "aborted"]
 # scored: the turns ran and were scored. infrastructure: a failure outside the model's control; the task is
@@ -130,8 +133,10 @@ class Hashes(BaseModel):
     retrieval_prompt: Sha256
     decide_prompt: Sha256
     tool_descriptions: Sha256  # the tools as the retrieval agent receives them
-    golden: Sha256
-    evaluation_code: Sha256
+    golden: Sha256  # both splits
+    evaluation_code: Sha256  # golden.py and scoring.py
+    gazetteer: Sha256  # decides every expected box and the oracle's
+    evaluation_rules: Sha256  # docs/evaluation.md
 
 
 class TaskCounts(BaseModel):
@@ -165,8 +170,11 @@ class RunRecord(BaseModel):
     shuffle_seed: int  # orders the tasks; the model's own seed is in model.options
     task_order: list[str] = Field(min_length=1)  # the task ids, in the order they ran
     # Calls in the run's tool log under none of the run's trace ids: they change no attempt, and the report
-    # marks a run that has any (decision of 2026-11-06).
+    # marks a run that has any (decision of 2026-11-06). A call that a turn past the harness timeout logs
+    # after its attempt was read is under a known trace id, so it is in neither the attempt nor this count.
     unattributed_calls: int = Field(default=0, ge=0)
+    # The tasks that ended. A task cut short by an abort has its attempts in attempts.jsonl and no count
+    # here, so `lost` cannot be read off "the last attempt is infrastructure".
     tasks: TaskCounts = TaskCounts()
     settings: dict[str, Value]
     libraries: dict[str, str]
@@ -326,7 +334,14 @@ def hashes(tool_descriptions: str) -> Hashes:
         tool_descriptions=tool_descriptions,
         golden=golden_hash(),
         evaluation_code=evaluation_code_hash(),
+        gazetteer=file_hash(GAZETTEER_PATH),
+        evaluation_rules=file_hash(EVALUATION_RULES),
     )
+
+
+def file_hash(path: Path) -> str:
+    """SHA-256 of a file's bytes."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def recorded_settings(settings: Settings) -> dict[str, Value]:
