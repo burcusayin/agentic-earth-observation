@@ -498,6 +498,11 @@ and the first real runs on the dev split. What came of them:
 - **The commit checks in CI were emptier than they read:** both the gitleaks hook and the private-files hook look at
   staged changes, and CI has none. CI now scans the whole history with gitleaks, and the private-files hook checks
   every tracked name when nothing is staged. The list of private strings exists only on the maintainer's machine.
+- **A turn that runs past its deadline stays infrastructure, also while the model is generating, and the report
+  shows every model both ways** (decided before any run on the test split). At that moment a slow machine and a
+  slow model look alike, and the frozen rules do not list a timeout as a model failure. But such a task leaves the
+  model's denominator, which can raise its score. So the report keeps the scores of 2026-11-02, with lost tasks
+  excluded, and adds the same scores with lost tasks counted as failed, next to the recorded model times.
 - **Left as they are, with the reason:**
   - An MCP answer the client cannot read waits for the timeout and counts as infrastructure (2026-11-02). It takes
     a garbled answer from our own server, and no such thing has been seen.
