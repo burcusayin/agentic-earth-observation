@@ -119,17 +119,21 @@ class TestBootstrap:
         )
 
     def test_whole_tasks_are_resampled_not_their_runs(self) -> None:
-        # Each task carries its three runs together; the statistic sees tasks, so a resample never mixes the
-        # runs of different tasks.
-        tasks = [("passed", "passed", "passed")] * 9 + [("failed", "failed", "failed")] * 9
-        seen: list[int] = []
+        # Each task carries its runs together, mixed ones included: every resampled item is one of the tasks
+        # as given, never a mixture of the runs of several.
+        tasks = [
+            ("passed", "failed", "passed"),
+            ("failed", "lost", "passed"),
+            ("passed", "passed", "errored"),
+        ]
+        strays: list[object] = []
 
-        def count_mixed(resampled: Sequence[tuple[str, ...]]) -> float:
-            seen.append(sum(1 for runs in resampled if len(set(runs)) > 1))
+        def check(resampled: Sequence[tuple[str, ...]]) -> float:
+            strays.extend(item for item in resampled if not any(item is task for task in tasks))
             return 0.0
 
-        bootstrap_interval(tasks, count_mixed, resamples=200)
-        assert set(seen) == {0}
+        bootstrap_interval(tasks, check, resamples=200)
+        assert strays == []
 
     @pytest.mark.parametrize(
         ("kwargs", "said"),

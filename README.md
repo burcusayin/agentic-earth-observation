@@ -21,7 +21,8 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
 | Orchestrator (LangGraph), an A2A client, and `eo-agent chat` | `src/agentic_earth_observation/orchestrator/`, `src/agentic_earth_observation/cli.py` | Done |
 | Evaluation runner, and `eo-agent eval` | `src/agentic_earth_observation/evals/run_eval.py` | Done on the dev split |
-| Results on the test split | `results/runs/` | Not run yet |
+| The report, and `eo-agent report` | `src/agentic_earth_observation/evals/report.py`, `stats.py` | Done; checked on the dev split |
+| Results on the test split | `results/runs/`, `results/summary.md` | Not run yet |
 
 ## Architecture
 
@@ -36,7 +37,8 @@ catalogue MCP server  -->  Earth Search STAC API (Sentinel-1 and Sentinel-2 scen
 ```
 
 The three parts run as separate processes, so each boundary is a real protocol boundary rather than a function
-call. The catalogue speaks STAC, the SpatioTemporal Asset Catalog API for satellite scene metadata. Only scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0.1` only.
+call. The catalogue speaks STAC, the SpatioTemporal Asset Catalog API for satellite scene metadata. Only
+scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0.1` only.
 
 ## Evaluation
 
@@ -95,6 +97,11 @@ make eval-smoke   # the evaluation on the dev split: starts its own servers; nee
 The dev split is for trying things: `uv run eo-agent eval --split dev --models qwen3.5:9b --runs 1` writes one
 folder per run under `results/raw/`, with its record, every attempt, the tool-call log and the server logs. The
 test split runs only with `--for-report`, from a clean checkout, because every run of it is reported.
+
+`uv run eo-agent report --split dev --runs-dir results/raw --allow-dirty` turns those folders into a report in
+markdown: every run with why it counts or not, then for each model the passed tasks with 95% intervals (lost
+tasks left out, and counted as failed), the comparison of the models, and the secondary measures. It prints task
+ids, never a task's text. `make report` writes the report on the test split's runs to `results/summary.md`.
 
 In the chat, each line continues the conversation: a follow-up such as "and the week after that?" continues
 the last search, and an answer to the assistant's own question (which place? which dates? did you mean …?)

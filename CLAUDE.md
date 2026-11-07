@@ -30,7 +30,8 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
     writes down: the run record and the attempt records), `outcome.py` (what a turn counts as: scored,
     infrastructure or errored), `servers.py` (the run's MCP server and retrieval agent as child processes),
     `model_server.py` (Ollama: which build runs, and that it alone is loaded), `run_eval.py` (the run loop,
-    `eo-agent eval`).
+    `eo-agent eval`), `stats.py` (bootstrap intervals, the exact sign test) and `report.py` (which runs count,
+    the numbers and the markdown, `eo-agent report`).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 
@@ -44,6 +45,7 @@ make format    # ruff format
 make hooks     # every pre-commit hook on every file; the private-files check, and gitleaks on staged changes
 make secrets   # gitleaks over the whole history, as CI runs it
 make eval-smoke  # one local run over the dev split: free, needs Ollama
+make report    # the report on the test split's runs, written to results/summary.md
 ```
 
 - **Dependencies:** `uv add '<pkg>>=X.Y,<NEXT_MAJOR>'`, or `uv add --group dev ...` for tools.

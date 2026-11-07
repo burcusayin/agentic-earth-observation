@@ -29,6 +29,7 @@ from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
 
+from agentic_earth_observation.catalog.gazetteer import GazetteerError
 from agentic_earth_observation.config import ROOT, Settings
 from agentic_earth_observation.evals.golden import SPLITS, GoldenError, golden_hash, load_golden
 from agentic_earth_observation.evals.model_server import ModelServerError
@@ -53,6 +54,7 @@ from agentic_earth_observation.orchestrator.models import TurnOutput
 
 QUIT = {"quit", "exit"}
 INTERRUPTED = 130  # the exit code of a command stopped by Ctrl+C
+REPORT_RUNS = ROOT / OUTPUT_FOLDER / REPORTED_RUNS  # the runs for the report: none yet before the first
 CANNOT_EVALUATE = (EvaluationError, GoldenError, ProvenanceError, ServerError, ModelServerError)
 
 
@@ -92,7 +94,7 @@ def main(argv: Sequence[str] | None = None, *, settings: Settings | None = None)
     report_parser.add_argument(
         "--runs-dir",
         type=Path,
-        default=ROOT / OUTPUT_FOLDER / REPORTED_RUNS,
+        default=REPORT_RUNS,
         help=f"the folder of the runs' folders (default: {OUTPUT_FOLDER}/{REPORTED_RUNS})",
     )
     report_parser.add_argument(
@@ -119,18 +121,24 @@ def main(argv: Sequence[str] | None = None, *, settings: Settings | None = None)
 
 def _report(args: argparse.Namespace) -> int:
     """Write the report on a split's runs. 0 when it was written, also when no run counts yet."""
+    if args.runs_dir != REPORT_RUNS and not args.runs_dir.exists():  # the default may not exist yet
+        print(f"error: there is no folder {args.runs_dir}: check --runs-dir", file=sys.stderr)
+        return 1
     try:
         tasks = [task for task in load_golden() if task.split == args.split]
         listed = collect_runs(
             args.runs_dir,
             args.split,
-            [task.id for task in tasks],
+            {task.id: len(task.turns) for task in tasks},
             golden=golden_hash(),
             allow_dirty=args.allow_dirty,
         )
         text = render_markdown(build_report(args.split, listed, tasks))
-    except (ReportError, GoldenError) as err:
+    except (ReportError, GoldenError, GazetteerError) as err:
         print(f"error: {err}", file=sys.stderr)
+        return 1
+    except OSError as err:  # a folder of runs or a golden file this user cannot read
+        print(f"error: {err.filename or 'a file'} cannot be read: {err.strerror}", file=sys.stderr)
         return 1
     if args.output is None:
         sys.stdout.write(text)

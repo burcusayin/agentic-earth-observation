@@ -3,7 +3,8 @@
 This first part reads the run folders: which runs count, and what each task came to in them. Every run is
 listed, and one that does not count says why: reports cover every run, failed ones included (decision of
 2026-11-05). Only a run that ended `complete`, from a clean checkout, on the frozen files and the split's
-tasks, with a record that adds up, is in the numbers.
+tasks, with a record that adds up, in a folder of its own name, and on the same setup as the latest such run,
+is in the numbers.
 """
 
 from __future__ import annotations
@@ -12,14 +13,14 @@ import json
 import shutil
 import subprocess
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agentic_earth_observation.config import ROOT
-from agentic_earth_observation.evals.golden import Task
+from agentic_earth_observation.evals.golden import SPLITS, Task
 from agentic_earth_observation.evals.records import (
     ATTEMPTS_FILE,
     MAX_ATTEMPTS,
@@ -59,9 +60,12 @@ RunState = Literal[
     "dirty",
     "other_golden_set",
     "inconsistent",
+    "other_setup",
     "reported",
 ]
 COUNTED: tuple[Result, ...] = ("passed", "failed", "errored", "lost")  # the order counts are written in
+RUNS_PER_MODEL = 3  # docs/evaluation.md: "Every model runs every task 3 times"
+TEST_SPLIT_TASKS = 18  # the frozen split the noise figures of docs/evaluation.md are for
 
 
 class ReportError(Exception):
@@ -88,37 +92,49 @@ class ListedRun(BaseModel):
 
 
 def collect_runs(
-    runs_dir: Path, split: Split, task_ids: Sequence[str], *, golden: str, allow_dirty: bool = False
+    runs_dir: Path,
+    split: Split,
+    task_turns: Mapping[str, int],
+    *,
+    golden: str,
+    allow_dirty: bool = False,
 ) -> list[ListedRun]:
     """Every run of `split` under `runs_dir`, in the order they started (their folder names sort so).
 
-    `task_ids` are the split's tasks and `golden` the hash of the golden set the report reads: a run on
-    another golden set is listed, not counted. `allow_dirty` counts runs from a checkout with changes, for
-    scratch use.
-    A folder without a record cannot say its split, so it is listed whatever the split.
+    `task_turns` names the split's tasks and how many turns each has, and `golden` is the hash of the golden
+    set the report reads: a run on another golden set is listed, not counted. `allow_dirty` counts runs from a
+    checkout with changes, for scratch use. A folder without a readable record cannot always say its split, so
+    it is listed unless it names the other split. Hidden folders (`.git`, ...) are not runs.
     """
     if not runs_dir.exists():
         return []
     if not runs_dir.is_dir():
         raise ReportError(f"{runs_dir.name} is not a folder: give the folder that holds the runs' folders")
     listed = []
-    for folder in sorted(path for path in runs_dir.iterdir() if path.is_dir()):
-        run = _listed(folder, split, task_ids, golden, allow_dirty)
+    for folder in sorted(
+        path for path in runs_dir.iterdir() if path.is_dir() and not path.name.startswith(".")
+    ):
+        run = _listed(folder, split, task_turns, golden, allow_dirty)
         if run is not None:
             listed.append(run)
     return listed
 
 
 def _listed(
-    folder: Path, split: Split, task_ids: Sequence[str], golden: str, allow_dirty: bool
+    folder: Path, split: Split, task_turns: Mapping[str, int], golden: str, allow_dirty: bool
 ) -> ListedRun | None:
     """How the report lists one folder, or None for a run of the other split."""
+    if folder.is_symlink():
+        return ListedRun(
+            folder=folder.name, state="inconsistent", reason="a link to another folder, not a run's own"
+        )
     if not (folder / RUN_FILE).exists():
         return ListedRun(folder=folder.name, state="did_not_start", reason=f"it has no {RUN_FILE}")
     try:
         record = read_run_record(folder)
     except RecordError as err:
-        if _named_split(folder) not in (split, None):
+        named = _named_split(folder)
+        if named in SPLITS and named != split:
             return None
         return ListedRun(folder=folder.name, state="unreadable", reason=_unreadable(err))
     if record.split != split:
@@ -127,6 +143,8 @@ def _listed(
     def listed(state: RunState, reason: str | None) -> ListedRun:
         return ListedRun(folder=folder.name, state=state, reason=reason, record=record)
 
+    if record.run_id != folder.name:  # a copy, or a folder renamed by hand: it would count twice
+        return listed("inconsistent", f"its record is of run {record.run_id}")
     if record.status == "running":
         return listed("running", "it crashed, or is still running")
     if record.status == "aborted":
@@ -136,13 +154,13 @@ def _listed(
     if changed := _other_frozen_files(record, golden):
         verb = "differs" if len(changed) == 1 else "differ"
         return listed("other_golden_set", f"{' and '.join(changed)} {verb} from what this report reads")
-    if set(record.task_order) != set(task_ids):  # a record that names a task twice does not read at all
+    if set(record.task_order) != set(task_turns):  # a record that names a task twice does not read at all
         return listed("other_golden_set", "its tasks are not the tasks of the split")
     try:
         attempts = read_attempts(folder)
-        results = task_results(record, attempts)
+        results = task_results(record, attempts, task_turns)
     except RecordError as err:
-        return listed("unreadable", f"{ATTEMPTS_FILE} cannot be read: {_without_folder(str(err), folder)}")
+        return listed("unreadable", _attempts_unreadable(err))
     except ValueError as err:
         return listed("inconsistent", str(err))
     tally = Counter(results.values())
@@ -166,10 +184,13 @@ def _other_frozen_files(record: RunRecord, golden: str) -> list[str]:
     return [name for name, (used, read) in expected.items() if used != read]
 
 
-def task_results(record: RunRecord, attempts: Sequence[AttemptRecord]) -> dict[str, Result]:
+def task_results(
+    record: RunRecord, attempts: Sequence[AttemptRecord], task_turns: Mapping[str, int]
+) -> dict[str, Result]:
     """What each task of a run came to, by its last attempt. ValueError when the attempts do not add up to a
     finished run: a task without attempts, an attempt of another run or task, attempts out of order, an
-    attempt after the last, or a task that ended before its last attempt without being scored."""
+    attempt after the last, a task that ended before its last attempt without being scored, or a scored
+    attempt whose turns say otherwise than its verdict (`task_turns`: how many turns each task has)."""
     tried: dict[str, list[AttemptRecord]] = {}
     for attempt in attempts:
         if attempt.run_id != record.run_id:
@@ -190,6 +211,7 @@ def task_results(record: RunRecord, attempts: Sequence[AttemptRecord]) -> dict[s
             raise ValueError(f"{task_id} has no attempt")
         last = tried[task_id][-1]
         if last.outcome == "scored":
+            _check_verdict(last, task_turns[task_id])
             results[task_id] = "passed" if last.passed else "failed"
         elif last.outcome == "errored":
             results[task_id] = "errored"
@@ -200,40 +222,115 @@ def task_results(record: RunRecord, attempts: Sequence[AttemptRecord]) -> dict[s
     return results
 
 
-def check_same_code(runs: Sequence[ListedRun], root: Path = ROOT) -> None:
-    """Refuse runs that did not run the same code. Run records are committed between invocations, which moves
-    HEAD, so commits may differ in `results/` only; the prompts and the tool descriptions must be the same."""
-    recorded = [(run.folder, run.record) for run in runs if run.record is not None]
-    if len(recorded) < 2:
+def _check_verdict(attempt: AttemptRecord, turns: int) -> None:
+    """A scored attempt passed when all its task's turns ran and passed, with no model failure; it failed at
+    its first failed turn, where the attempt stops (decision of 2026-11-07)."""
+    task = attempt.task_id
+    ok = [
+        turn.score is not None
+        and turn.score.passed
+        and turn.output is not None
+        and turn.output.failure is None
+        for turn in attempt.turns
+    ]
+    if attempt.passed:
+        if not all(ok):
+            raise ValueError(f"{task} passed, though a turn of it failed")
+        if len(ok) != turns:
+            raise ValueError(f"{task} passed with {len(ok)} of its {turns} turns")
         return
-    first_folder, first = recorded[0]
-    for folder, record in recorded[1:]:
-        for field in ("retrieval_prompt", "decide_prompt", "tool_descriptions"):
-            if getattr(record.hashes, field) != getattr(first.hashes, field):
-                raise ReportError(
-                    f"{folder} differs from {first_folder} in {field}: runs compared must use the same "
-                    "prompts and tools"
-                )
-        if record.code.commit != first.code.commit:
-            _same_code(first_folder, first.code.commit, folder, record.code.commit, root)
+    if all(ok):
+        raise ValueError(f"{task} failed, though every turn of it passed")
+    if len(ok) > turns or ok.index(False) != len(ok) - 1:
+        raise ValueError(f"{task} failed but did not stop at its first failed turn")
 
 
-def _same_code(first_folder: str, first: str, folder: str, commit: str, root: Path) -> None:
-    for name, sha in ((first_folder, first), (folder, commit)):
-        if _git(root, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
-            raise ReportError(
-                f"{name} ran on {sha[:12]}, which this repository does not have: fetch it, or report from a "
-                "clone that has it"
-            )
-    done = _git(root, "diff", "--quiet", first, commit, "--", ".", f":(exclude){OUTPUT_FOLDER}")
-    if done.returncode == 1:
-        raise ReportError(
-            f"{folder} ran on {commit[:12]}, whose code differs from {first[:12]} outside {OUTPUT_FOLDER}/: "
-            "runs compared must come from the same code"
+def mark_comparable(listed: Sequence[ListedRun], root: Path = ROOT) -> list[ListedRun]:
+    """`listed`, with every counted run that is not on the latest counted run's setup marked `other_setup`,
+    and what differs. After a fix the runs are repeated and both are listed (decision of 2026-11-05): the
+    latest, which count, and the earlier ones, which do not.
+
+    The setup: the code (commits may differ only in `results/`, where run records are committed between runs),
+    the prompts and tool descriptions, the settings, the model options, the task order's seed, the reference
+    date, the Ollama version, and for runs of the same model its build. Runs of other models are compared with
+    the latest run too, except for the build."""
+    # A counted run always has its record (ListedRun checks it); the filter only tells the type checker.
+    counted = [(run, run.record) for run in listed if run.state == "reported" and run.record is not None]
+    if len(counted) < 2:
+        return list(listed)
+    latest, latest_record = counted[-1]
+    latest_of_model = {record.model.model: run for run, record in counted}  # the last one of each model stays
+    marked = []
+    for run in listed:
+        if run.state != "reported" or run is latest or run.record is None:
+            marked.append(run)
+            continue
+        same_model = latest_of_model[run.record.model.model]
+        why = _setup_differs(run.record, latest.folder, latest_record, same_model, root)
+        marked.append(
+            run.model_copy(update={"state": "other_setup", "reason": why, "results": {}, "attempts": []})
+            if why
+            else run
         )
-    if done.returncode != 0:
-        said = " ".join(done.stderr.split())[:200]
-        raise ReportError(f"git cannot compare {first[:12]} and {commit[:12]} in {root.name}: {said}")
+    return marked
+
+
+def _setup_differs(
+    record: RunRecord, latest_folder: str, latest: RunRecord, same_model: ListedRun, root: Path
+) -> str | None:
+    """How a run's setup differs from the latest counted run's, or None."""
+    for field, words in (
+        ("retrieval_prompt", "retrieval prompt differs from that"),
+        ("decide_prompt", "decision prompt differs from that"),
+        ("tool_descriptions", "tool descriptions differ from those"),
+    ):
+        if getattr(record.hashes, field) != getattr(latest.hashes, field):
+            return f"its {words} of {latest_folder}"
+    for what, mine, theirs in (
+        ("settings", record.settings, latest.settings),
+        ("model options", record.model.options, latest.model.options),
+    ):
+        if changed := sorted(key for key in mine.keys() | theirs.keys() if mine.get(key) != theirs.get(key)):
+            return f"its {what} differ from those of {latest_folder}: {', '.join(changed)}"
+    if record.shuffle_seed != latest.shuffle_seed:
+        return f"its task order's seed differs from that of {latest_folder}"
+    if record.reference_date != latest.reference_date:
+        return f"its reference date differs from that of {latest_folder}"
+    if record.model.server_version != latest.model.server_version:
+        return f"it ran on another Ollama version than {latest_folder}"
+    if same_model.record is not None and record.model.digest != same_model.record.model.digest:
+        return f"it ran another build of {record.model.model} than {same_model.folder}"
+    if record.code.commit != latest.code.commit:
+        if not _has_commit(root, latest.code.commit):  # the setup cannot be known: report from another clone
+            raise ReportError(
+                f"{latest_folder} ran on {latest.code.commit[:12]}, which this repository does not have: "
+                "fetch it, or report from a clone that has it"
+            )
+        if not _has_commit(root, record.code.commit):
+            return f"its commit {record.code.commit[:12]} is not in this repository"
+        done = _git(
+            root,
+            "diff",
+            "--quiet",
+            record.code.commit,
+            latest.code.commit,
+            "--",
+            ".",
+            f":(exclude){OUTPUT_FOLDER}",
+        )
+        if done.returncode == 1:
+            return f"its code differs from that of {latest_folder} outside {OUTPUT_FOLDER}/"
+        if done.returncode != 0:
+            said = " ".join(done.stderr.split())[:200]
+            raise ReportError(
+                f"git cannot compare {record.code.commit[:12]} and {latest.code.commit[:12]} in "
+                f"{root.name}: {said}"
+            )
+    return None
+
+
+def _has_commit(root: Path, sha: str) -> bool:
+    return _git(root, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
 
 
 def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -267,12 +364,26 @@ def _unreadable(err: RecordError) -> str:
             f"{RUN_FILE} is not a run record this version reads: {_count(cause.error_count(), 'problem')}, "
             f"the first at {where}: {first['msg']}"
         )
+    if isinstance(cause, UnicodeDecodeError):
+        return f"{RUN_FILE} is not UTF-8 text"
     strerror = getattr(cause, "strerror", None)  # read_run_record wraps an OSError otherwise
     return f"{RUN_FILE} cannot be read" + (f" ({strerror})" if strerror else "")
 
 
-def _without_folder(message: str, folder: Path) -> str:
-    return message.replace(str(folder), folder.name)
+def _attempts_unreadable(err: RecordError) -> str:
+    """Why attempts.jsonl cannot be read: never the text of the line, which can quote a task or an answer."""
+    cause = err.__cause__
+    if isinstance(cause, ValidationError):
+        first = cause.errors()[0]
+        where = ".".join(str(part) for part in first["loc"]) or "the top"
+        return (
+            f"line {err.line} of {ATTEMPTS_FILE} is not an attempt record this version reads: "
+            f"{_count(cause.error_count(), 'problem')}, the first at {where}: {first['msg']}"
+        )
+    if isinstance(cause, UnicodeDecodeError):
+        return f"{ATTEMPTS_FILE} is not UTF-8 text"
+    strerror = getattr(cause, "strerror", None)
+    return f"{ATTEMPTS_FILE} cannot be read" + (f" ({strerror})" if strerror else "")
 
 
 def _counts(counts: TaskCounts) -> str:
@@ -352,11 +463,15 @@ class ModelSummary(BaseModel):
     first_call: Rate  # ... and whose first one had: the difference is self-correction
     over_clarification: Rate  # search turns that ended asking instead
     over_refusal: Rate  # search turns that ended declining instead
-    precision: Mean | None
+    precision: (
+        Mean | None
+    )  # the mean over turns of each turn's precision: a turn citing many scenes weighs one
     recall: Mean | None
+    oracle_failures: int  # turns whose catalogue query failed: left out of precision and recall
+    temperature: list[float | None]  # as the model options record it; None where they do not
     grounding_failures: int
     model_failures: dict[str, int]
-    errored: list[str]  # "task (run n)": a bug of ours, counted as failed
+    errored: list[str]  # "task (run n)", n the run's column: a bug of ours, counted as failed
     infrastructure_attempts: int
     lost: int
     unattributed_calls: int
@@ -393,11 +508,11 @@ class Report(BaseModel):
 def build_report(
     split: Split, listed: Sequence[ListedRun], tasks: Sequence[Task], *, root: Path = ROOT
 ) -> Report:
-    """The numbers of the runs that count. ReportError when the runs compared did not run the same code, or a
-    model ran as more than one build."""
+    """The numbers of the runs that count, once the runs on another setup than the latest are marked so
+    (`mark_comparable`)."""
+    listed = mark_comparable(listed, root)
     # A counted run always has its record (ListedRun checks it); the filter only tells the type checker.
     counted = [(run, run.record) for run in listed if run.state == "reported" and run.record is not None]
-    check_same_code([run for run, _ in counted], root)
     by_model: dict[str, list[tuple[ListedRun, RunRecord]]] = {}
     for run, record in counted:
         by_model.setdefault(record.model.model, []).append((run, record))
@@ -415,15 +530,7 @@ def _model_summary(
     name: str, counted: Sequence[tuple[ListedRun, RunRecord]], tasks: Sequence[Task]
 ) -> ModelSummary:
     runs = [run for run, _ in counted]
-    records = [record for _, record in counted]
-    builds: dict[str | None, str] = {}
-    for run, record in zip(runs, records, strict=True):
-        builds.setdefault(record.model.digest, run.folder)
-    if len(builds) > 1:
-        named = ", ".join(f"{digest} in {folder}" for digest, folder in builds.items())
-        raise ReportError(
-            f"{name} ran as more than one build: {named}. Report the runs of one build together"
-        )
+    records = [record for _, record in counted]  # one build of the model: mark_comparable saw to it
     per_task = {task.id: [run.results[task.id] for run in runs] for task in tasks}
     results = list(per_task.values())
     with_result = [runs_of for runs_of in results if task_share(runs_of, lost="excluded") is not None]
@@ -450,6 +557,10 @@ def _model_summary(
         over_refusal=_rate(search, lambda turn: turn.output is not None and turn.output.status == "declined"),
         precision=_mean([turn.oracle.precision for turn in finals if turn.oracle is not None]),
         recall=_mean([turn.oracle.recall for turn in finals if turn.oracle is not None]),
+        oracle_failures=sum(
+            1 for turn in finals if turn.oracle is not None and turn.oracle.failed is not None
+        ),
+        temperature=_temperatures(records),
         grounding_failures=sum(1 for turn in finals if turn.score is not None and not turn.score.grounded),
         model_failures=dict(
             sorted(
@@ -457,8 +568,8 @@ def _model_summary(
             )
         ),
         errored=[
-            f"{task.id} (run {record.run_index})"
-            for run, record in zip(runs, records, strict=True)
+            f"{task.id} (run {position})"  # the column of the per-task table
+            for position, run in enumerate(runs, start=1)
             for task in tasks
             if run.results[task.id] == "errored"
         ],
@@ -469,6 +580,19 @@ def _model_summary(
         unattributed_calls=sum(record.unattributed_calls for record in records),
         cost=_cost([attempt for run in runs for attempt in _scored_last_attempts(run)]),
     )
+
+
+def _temperatures(records: Sequence[RunRecord]) -> list[float | None]:
+    """The temperatures the runs' model options record, None for a run that records none."""
+    found: set[float | None] = set()
+    for record in records:
+        value = record.model.options.get("temperature")
+        found.add(float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None)
+    return sorted(found, key=lambda value: (value is None, value or 0.0))
+
+
+def _temperature_words(values: Sequence[float | None]) -> str:
+    return ", ".join("not recorded" if value is None else f"{value:g}" for value in values)
 
 
 def _passed_left_out(tasks: Sequence[Sequence[Result]]) -> float:
@@ -618,7 +742,7 @@ def render_markdown(report: Report) -> str:
     if report.models:
         lines += _headline_table(report.models)
         if report.comparisons:
-            lines += _comparison_table(report.comparisons)
+            lines += _comparison_table(report.comparisons, report.models[0].tasks)
         for summary in report.models:
             lines += _model_section(summary)
         lines += _notes(report)
@@ -637,10 +761,10 @@ def _runs_table(listed: Sequence[ListedRun]) -> list[str]:
         record = run.record
         counts = record.tasks if record is not None else None
         cells = [
-            run.folder,
+            _cell(run.folder),
             STATE_WORDS[run.state],
             _cell(run.reason or ""),
-            record.model.model if record is not None else "",
+            _cell(record.model.model) if record is not None else "",
             *([str(getattr(counts, what)) for what in COUNTED] if counts is not None else [""] * 4),
             str(record.unattributed_calls) if record is not None else "",
         ]
@@ -652,8 +776,9 @@ def _headline_table(models: Sequence[ModelSummary]) -> list[str]:
     lines = [
         "## Passed tasks",
         "",
-        "The mean over a model's runs, with a 95% bootstrap interval that resamples whole tasks. A lost task "
-        "fell to the infrastructure in every attempt: it is shown both ways.",
+        "For each task, the share of its runs that passed, summed over the tasks: with lost runs left out "
+        "(out of the tasks with a result) and counted as failed (out of all tasks). A run is lost when every "
+        "attempt fell to the infrastructure. The 95% interval resamples whole tasks.",
         "",
         "| Model | Lost tasks left out | Lost tasks counted as failed | Same result in every run | Runs |",
         "|---|---|---|---|---|",
@@ -665,19 +790,24 @@ def _headline_table(models: Sequence[ModelSummary]) -> list[str]:
             else "none"
         )
         lines.append(
-            f"| {summary.model} | {left_out} | {_interval(summary.lost_failed, summary.tasks)} | "
+            f"| {_cell(summary.model)} | {left_out} | {_interval(summary.lost_failed, summary.tasks)} | "
             f"{_stability(summary)} | {len(summary.runs)} |"
         )
     return [*lines, ""]
 
 
-def _comparison_table(comparisons: Sequence[Comparison]) -> list[str]:
+def _comparison_table(comparisons: Sequence[Comparison], tasks: int) -> list[str]:
+    noise = (
+        "differences of less than about 25 to 35 points (5 or 6 tasks) can be noise (docs/evaluation.md)"
+        if tasks == TEST_SPLIT_TASKS
+        else f"with {_count(tasks, 'task')} the intervals are wide, so read any difference with care"
+    )
     lines = [
         "## Between models",
         "",
-        "A task's result for a model is the majority of its runs. The exact sign test uses the tasks only "
-        f"one of the two passed. {_count(len(comparisons), 'comparison')}; differences of fewer than about "
-        "5 tasks can be noise.",
+        "A task's result for a model is the majority of its runs; a task without one is left out. The exact "
+        f"sign test uses the tasks only one of the two passed. {_count(len(comparisons), 'comparison')}; "
+        f"{noise}.",
         "",
         "| First | Second | Only the first passed | Only the second passed | Left out (no majority) | p | "
         "Both passed | Both failed |",
@@ -685,18 +815,21 @@ def _comparison_table(comparisons: Sequence[Comparison]) -> list[str]:
     ]
     for pair in comparisons:
         lines.append(
-            f"| {pair.first} | {pair.second} | {pair.first_only} | {pair.second_only} | {pair.left_out} | "
-            f"{pair.p_value:.2f} | {pair.both_passed} | {pair.both_failed} |"
+            f"| {_cell(pair.first)} | {_cell(pair.second)} | {pair.first_only} | {pair.second_only} | "
+            f"{pair.left_out} | {_p(pair.p_value)} | {pair.both_passed} | {pair.both_failed} |"
         )
     return [*lines, ""]
 
 
 def _model_section(summary: ModelSummary) -> list[str]:
+    runs = len(summary.runs)
     lines = [
-        f"## {summary.model}",
+        f"## {_cell(summary.model)}",
         "",
-        f"Build {summary.digest or 'unknown'}, Ollama {', '.join(summary.server_versions)}; runs "
-        f"{', '.join(summary.runs)}.",
+        f"Build {_cell(summary.digest or 'unknown')}, Ollama {_cell(', '.join(summary.server_versions))}, "
+        f"temperature {_temperature_words(summary.temperature)}; {_count(runs, 'run')}"
+        + ("" if runs == RUNS_PER_MODEL else f", where the rules call for {RUNS_PER_MODEL}")
+        + f": {_cell(', '.join(summary.runs))}.",
         "",
         "| Measure | Value |",
         "|---|---|",
@@ -704,13 +837,15 @@ def _model_section(summary: ModelSummary) -> list[str]:
         f"| First search call with every argument right | {summary.first_call} |",
         f"| Asked instead of searching | {summary.over_clarification} |",
         f"| Declined instead of searching | {summary.over_refusal} |",
-        f"| Scene precision | {_mean_text(summary.precision)} |",
-        f"| Recall | {_mean_text(summary.recall)} |",
+        f"| Scene precision, the mean over turns | {_mean_text(summary.precision)} |",
+        f"| Recall, the mean over turns | {_mean_text(summary.recall)} |",
+        f"| Catalogue queries for them that failed (turns left out) | {summary.oracle_failures} |",
         f"| Answers citing a scene no tool returned | {summary.grounding_failures} |",
         "| Model failures | "
         + (", ".join(f"{kind} {count}" for kind, count in summary.model_failures.items()) or "none")
         + " |",
-        f"| Errored tasks (a bug of ours, counted as failed) | {', '.join(summary.errored) or 'none'} |",
+        "| Errored tasks (a bug of ours, counted as failed) | "
+        f"{_cell(', '.join(summary.errored)) or 'none'} |",
         f"| Attempts lost to the infrastructure (retried) | {summary.infrastructure_attempts} |",
         f"| Tasks lost in every attempt | {summary.lost} |",
         f"| Tool calls under no trace id of the run | {summary.unattributed_calls} |",
@@ -728,30 +863,53 @@ def _model_section(summary: ModelSummary) -> list[str]:
     lines += ["", "| Category | Passed, lost runs left out |", "|---|---|"]
     for category, share in summary.per_category.items():
         lines.append(
-            f"| {category} | {share.passed:.1f} of {share.with_result} (of {_count(share.tasks, 'task')}) |"
+            f"| {_cell(category)} | {share.passed:.2f} of {share.with_result} "
+            f"(of {_count(share.tasks, 'task')}) |"
         )
     runs_header = " | ".join(f"Run {index}" for index in range(1, len(summary.runs) + 1))
     lines += ["", f"| Task | {runs_header} |", "|---|" + "---|" * len(summary.runs)]
     for task_id, results in summary.per_task.items():
-        lines.append(f"| {task_id} | " + " | ".join(RESULT_WORDS[result] for result in results) + " |")
+        lines.append(f"| {_cell(task_id)} | " + " | ".join(RESULT_WORDS[result] for result in results) + " |")
     return [*lines, ""]
 
 
 def _notes(report: Report) -> list[str]:
     tasks = report.models[0].tasks
+    temperatures = sorted(
+        {value for summary in report.models for value in summary.temperature},
+        key=lambda value: (value is None, value or 0.0),
+    )
+    grounding = sum(summary.grounding_failures for summary in report.models)
     return [
         "## Reading these numbers",
         "",
-        f"- With {tasks} tasks, one task is {100 / tasks:.1f} points. Per-category numbers are descriptive "
-        "only.",
-        "- A model's runs at temperature 0 are nearly identical: they show stability, not more evidence.",
+        f"- With {_count(tasks, 'task')}, one task is {100 / tasks:.1f} points. Per-category numbers are "
+        "descriptive only.",
+        f"- The runs were at temperature {_temperature_words(temperatures)}"
+        + (
+            ": at 0 a model's runs are nearly identical, so they show stability, not more evidence."
+            if temperatures == [0.0]
+            else "."
+        ),
         "- Infrastructure failures are retried and excluded; errored tasks are a bug of ours and count as "
         "failed.",
-        "- Answers are built from templates and cite only scene ids the tools returned, so grounding is a "
-        "property of the design.",
+        "- An attempt stops at its first failed turn, so the measures per turn and the cost of a task cover "
+        "the turns that ran: a follow-up failed at its first turn adds one turn and a shorter task.",
+        (
+            "- Answers are built from templates and cite only scene ids the tools returned, so grounding is "
+            "a property of the design: no answer cited another."
+            if grounding == 0
+            else f"- {_count(grounding, 'answer')} cited a scene no tool returned, which the templates "
+            "should prevent: a bug to look into before reading the rest."
+        ),
         "- Rules and limitations: `docs/evaluation.md` and `docs/decisions.md`.",
         "",
     ]
+
+
+def _p(value: float) -> str:
+    """A p-value with two significant digits, never rounded to 0."""
+    return "<0.001" if value < 0.001 else f"{value:.2g}"
 
 
 def _stability(summary: ModelSummary) -> str:

@@ -101,7 +101,12 @@ class ProvenanceError(Exception):
 
 
 class RecordError(Exception):
-    """A run's files are missing or cannot be read. The message names the file and, for a line, its number."""
+    """A run's files are missing or cannot be read. The message names the file and, for a line, its number,
+    which is also `line`."""
+
+    def __init__(self, message: str, *, line: int | None = None) -> None:
+        super().__init__(message)
+        self.line = line
 
 
 class CodeVersion(BaseModel):
@@ -397,6 +402,8 @@ def read_run_record(folder: Path) -> RunRecord:
     path = folder / RUN_FILE
     try:
         text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as err:  # a ValueError, not an OSError
+        raise RecordError(f"{path} is not UTF-8 text (byte {err.start})") from err
     except OSError as err:
         raise RecordError(f"cannot read {path} ({err.strerror}): is {folder} the folder of a run?") from err
     try:
@@ -415,6 +422,8 @@ def read_attempts(folder: Path) -> list[AttemptRecord]:
         return []
     try:
         text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as err:  # a ValueError, not an OSError
+        raise RecordError(f"{path} is not UTF-8 text (byte {err.start})") from err
     except OSError as err:
         raise RecordError(f"cannot read {path} ({err.strerror})") from err
     attempts = []
@@ -425,5 +434,5 @@ def read_attempts(folder: Path) -> list[AttemptRecord]:
         try:
             attempts.append(AttemptRecord.model_validate_json(line))
         except ValidationError as err:
-            raise RecordError(f"{path}:{number}: not an attempt record: {err}") from err
+            raise RecordError(f"{path}:{number}: not an attempt record: {err}", line=number) from err
     return attempts
