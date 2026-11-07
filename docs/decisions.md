@@ -556,3 +556,9 @@ changed:
 - **The pre-check of the golden texts against `RetrievalRequest`** promised on 2026-11-05 is a test, not a step of
   the run: a task's text is at most 1,000 characters and the request accepts 2,000, so the check cannot fail at run
   time.
+- **An attempt stops at its first failed turn, and the task counts as failed** (the maintainer's choice, before any
+  run on the test split). A task fails when any turn fails, so once a turn has failed its score, or had a model
+  failure, the verdict is known. Running the later turns only let a turn lost to the infrastructure void the
+  verdict: the whole attempt was retried, and the model got another go at the turn it had failed. The later
+  turns of a failed attempt are therefore not in its record, and the final-turn numbers of the report are over
+  tasks whose earlier turns passed, as `docs/evaluation.md` already conditions them.

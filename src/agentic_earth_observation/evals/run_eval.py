@@ -511,6 +511,11 @@ async def _attempt(task: Task, conversation: str, number: int, run: _Running) ->
         )
         outputs.append(output)
         scores.append(score)
+        if not score.passed or output.failure is not None:
+            # The task has failed, whatever the later turns would do: they are not run, so that a later turn
+            # lost to the infrastructure cannot give the model another go at this one (decision of
+            # 2026-11-07).
+            break
     passed: bool | None = None
     if outcome == "scored":
         try:

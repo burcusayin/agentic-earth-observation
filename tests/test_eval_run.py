@@ -694,6 +694,33 @@ class TestTheOracleQuery:
         assert turn.oracle.precision is None
         assert run.attempts()[0].passed
 
+    async def test_an_attempt_stops_at_its_first_failed_turn(self, tmp_path: Path) -> None:
+        # Turn 1 searches the wrong week, so the task has failed; turn 2 would be lost to the infrastructure,
+        # which must not give the model another go at turn 1 through a retry.
+        wrong_week = arguments("Naples", "sentinel-1-grd", "2025-09-08", "2025-09-14")
+        script = passing_script()
+        script[NAPLES] = [
+            Step(
+                delegated(found(wrong_week, "Naples", [NAPLES_SCENE])),
+                [
+                    call("resolve_place", 1, name="Naples"),
+                    call("search_scenes", 2, ids=[NAPLES_SCENE.id], **wrong_week),
+                ],
+            )
+        ]
+        script[NAPLES_AGAIN] = [Step(UNREACHABLE)]
+        run = Run(tmp_path)
+        final = await run.go(script)
+        assert final.status == "complete"
+        assert final.tasks == TaskCounts(passed=3, failed=1)
+        (attempt,) = [a for a in run.attempts() if a.task_id == "dev-follow-naples-weeks"]
+        assert (attempt.outcome, attempt.passed) == ("scored", False)
+        assert len(attempt.turns) == 1
+        assert attempt.turns[0].score is not None
+        assert not attempt.turns[0].score.passed
+        assert run.orchestrator is not None
+        assert [text for _, _, text in run.orchestrator.turns if text == NAPLES_AGAIN] == []
+
     async def test_a_query_that_does_not_answer_in_time_is_recorded(self, tmp_path: Path) -> None:
         run = Run(tmp_path, catalog=SlowCatalog(), config=settings(stac_timeout_s=0.01, stac_deadline_s=0.05))
         await run.go(passing_script())

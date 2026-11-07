@@ -175,6 +175,7 @@ class RunRecord(BaseModel):
     unattributed_calls: int = Field(default=0, ge=0)
     # The tasks that ended. A task cut short by an abort has its attempts in attempts.jsonl and no count
     # here, so `lost` cannot be read off "the last attempt is infrastructure".
+    # An attempt that failed a turn has no record of the turns after it: they did not run (2026-11-07).
     tasks: TaskCounts = TaskCounts()
     settings: dict[str, Value]
     libraries: dict[str, str]
