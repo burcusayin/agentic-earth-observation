@@ -9,6 +9,7 @@ left out, and counted as failed (decision of 2026-11-07).
 
 from __future__ import annotations
 
+import itertools
 import math
 import random
 from collections.abc import Callable, Sequence
@@ -58,14 +59,20 @@ def bootstrap_interval[T](
     tail = (1 - confidence) / 2
     return Interval(
         estimate=statistic(tasks),
-        low=_quantile(values, tail),
-        high=_quantile(values, 1 - tail),
+        low=quantile(values, tail),
+        high=quantile(values, 1 - tail),
         confidence=confidence,
     )
 
 
-def _quantile(ordered: Sequence[float], q: float) -> float:
+def quantile(ordered: Sequence[float], q: float) -> float:
     """The q-quantile of sorted values, interpolated between the two nearest (numpy's default)."""
+    if not ordered:
+        raise ValueError("a quantile needs at least one value")
+    if not 0 <= q <= 1:
+        raise ValueError(f"q must be between 0 and 1, not {q}")
+    if any(later < earlier for earlier, later in itertools.pairwise(ordered)):
+        raise ValueError("pass the values sorted")
     position = q * (len(ordered) - 1)
     below, above = math.floor(position), math.ceil(position)
     return ordered[below] + (ordered[above] - ordered[below]) * (position - below)

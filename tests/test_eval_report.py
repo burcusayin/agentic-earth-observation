@@ -6,30 +6,43 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from agentic_earth_observation.domain import Product
 from agentic_earth_observation.evals import report
+from agentic_earth_observation.evals.golden import Category, Expectation, ExpectedSearch, Route, Task, Turn
 from agentic_earth_observation.evals.records import (
     AttemptOutcome,
     AttemptRecord,
     CodeVersion,
     Hashes,
+    ModelBuild,
+    OracleCheck,
     RunRecord,
     TaskCounts,
+    TurnRecord,
     append_attempt,
     read_attempts,
     read_run_record,
     write_run_record,
 )
 from agentic_earth_observation.evals.report import (
+    CategoryShare,
+    Comparison,
     ListedRun,
+    Mean,
+    ModelSummary,
+    Rate,
+    Report,
     ReportError,
+    build_report,
     check_same_code,
     collect_runs,
+    render_markdown,
     task_results,
 )
 from agentic_earth_observation.evals.run_eval import (
@@ -37,7 +50,10 @@ from agentic_earth_observation.evals.run_eval import (
     FROZEN_EVALUATION_RULES,
     FROZEN_GAZETTEER,
 )
-from agentic_earth_observation.evals.scoring import TurnScore
+from agentic_earth_observation.evals.scoring import ArgumentScore, TurnScore
+from agentic_earth_observation.orchestrator.models import TurnOutput
+from agentic_earth_observation.retrieval_agent.models import ModelFailure
+from tests.fakes import SCENE
 from tests.test_eval_records import ALL_RIGHT, PASSED, STARTED, git, run_record, turn
 
 GOLDEN = "9" * 64  # the golden set the report is made from: any hash, the same in the records
@@ -156,7 +172,8 @@ class TestWhichRunsCount:
         (run,) = collect(tmp_path)
         assert run.state == "unreadable"
         assert run.reason is not None
-        assert run.reason.startswith("run.json is not a run record this version reads:")
+        assert run.reason.startswith("run.json is not a run record this version reads: ")
+        assert "problem(s)" not in run.reason
         assert str(tmp_path) not in run.reason
 
     @pytest.mark.parametrize(
@@ -444,3 +461,553 @@ class TestSameCode:
     def test_one_run_or_none_needs_no_comparison(self, repo: Path) -> None:
         check_same_code([], repo)
         check_same_code([reported("r1", "fedcba9876543210" * 2 + "01234567")], repo)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# The numbers: two models, three runs each, over three made-up tasks. Every expected value below is worked
+# out by hand from this table (P passed, F failed, E errored, L lost after three attempts):
+#
+#   task             m1: run 1  run 2       run 3    m2: run 1  run 2  run 3
+#   dev-a (search)       P*     I then P    P            F#     F#     F#
+#   dev-b (search)       F~     F~          P            P      P      P
+#   dev-c (decline)      P      L           E            P      P      P
+#
+#   * first search call wrong, last right (self-corrected); ~ last call wrong (dates); # declined a task that
+#   expected a search, with a parse error (a model failure). I: one attempt lost to the infrastructure.
+# ---------------------------------------------------------------------------------------------------------
+
+WRONG_DATES = ALL_RIGHT.model_copy(update={"dates": False})
+NO_SEARCH = ALL_RIGHT.model_copy(
+    update={
+        "product": False,
+        "bbox": False,
+        "dates": False,
+        "cloud": False,
+        "limit": False,
+        "no_extra": False,
+    }
+)
+
+
+def search_task(task_id: str, category: Category) -> Task:
+    search = ExpectedSearch(
+        product=Product.SENTINEL_2_L2A,
+        place="Milan",
+        start=date(2025, 3, 1),
+        end=date(2025, 3, 31),
+        cloud=(0, 20),
+    )
+    expect = Expectation(
+        route=Route.DELEGATE, required_tools=["resolve_place", "search_scenes"], search=search
+    )
+    return Task(id=task_id, split="dev", category=category, turns=[Turn(user="(a question)", expect=expect)])
+
+
+def decline_task(task_id: str) -> Task:
+    expect = Expectation(route=Route.DECLINE, forbidden_tools=["search_scenes"])
+    return Task(
+        id=task_id,
+        split="dev",
+        category=Category.OUT_OF_SCOPE,
+        turns=[Turn(user="(a question)", expect=expect)],
+    )
+
+
+GOLDEN_TASKS = [
+    search_task("dev-a", Category.SINGLE_SEARCH),
+    search_task("dev-b", Category.ROBUSTNESS),
+    decline_task("dev-c"),
+]
+
+
+def declined(failure: ModelFailure | None = None) -> TurnOutput:
+    return TurnOutput(
+        trace_id="0a1b2c3d-t01-a1-u1",
+        route=Route.DECLINE,
+        status="declined",
+        answer="(the reply)",
+        failure=failure,
+    )
+
+
+def scored_turn(
+    *,
+    seconds: float,
+    passed: bool = True,
+    arguments: ArgumentScore | None = ALL_RIGHT,
+    first: ArgumentScore | None = None,
+    precision: float | None = 1.0,
+    recall: float | None = None,
+    output: TurnOutput | None = None,
+) -> TurnRecord:
+    score = TurnScore(
+        route=passed or arguments is not NO_SEARCH,
+        tools=True,
+        arguments=arguments,
+        first_arguments=first if first is not None else arguments,
+        grounded=True,
+        outcome=passed,
+    )
+    oracle = (
+        OracleCheck(ids=[SCENE.id], precision=precision, recall=recall) if precision is not None else None
+    )
+    changes: dict[str, Any] = {"seconds": seconds, "score": score, "oracle": oracle}
+    if output is not None:
+        changes |= {"output": output, "calls": []}
+    return turn(**changes)
+
+
+def ended(
+    run_id: str,
+    task_id: str,
+    number: int,
+    outcome: AttemptOutcome,
+    passed: bool | None,
+    the_turn: TurnRecord | None = None,
+) -> AttemptRecord:
+    if outcome == "scored":
+        assert the_turn is not None
+        assert the_turn.score is not None
+        assert the_turn.score.passed is passed, "the scenario's turn must agree"
+        return AttemptRecord(
+            run_id=run_id, task_id=task_id, attempt=number, outcome="scored", passed=passed, turns=[the_turn]
+        )
+    return attempt(run_id, task_id, number, outcome, passed)
+
+
+def model_build(model: str, digest: str = "digest-of-the-model") -> ModelBuild:
+    return ModelBuild(
+        provider="ollama", model=model, digest=digest, server_version="0.40.1", options={"seed": 42}
+    )
+
+
+def write_attempts(runs: Path, run_id: str, attempts: Sequence[AttemptRecord], **changes: Any) -> None:  # noqa: ANN401 - any field of the record
+    folder = runs / run_id
+    write_run_record(folder, record(run_id, **changes))
+    for one in attempts:
+        append_attempt(folder, one)
+
+
+def write_scenario(runs: Path, *, m1_digests: Sequence[str] = ("d1", "d1", "d1")) -> None:
+    a_first = scored_turn(seconds=10, first=WRONG_DATES, recall=0.8)
+    m1 = {
+        "a1": [
+            ended("a1", "dev-a", 1, "scored", True, a_first),
+            ended(
+                "a1",
+                "dev-b",
+                1,
+                "scored",
+                False,
+                scored_turn(seconds=20, passed=False, arguments=WRONG_DATES, precision=0.5),
+            ),
+            ended(
+                "a1",
+                "dev-c",
+                1,
+                "scored",
+                True,
+                scored_turn(seconds=5, arguments=None, precision=None, output=declined()),
+            ),
+        ],
+        "a2": [
+            ended("a2", "dev-a", 1, "infrastructure", None),
+            ended("a2", "dev-a", 2, "scored", True, scored_turn(seconds=11)),
+            ended(
+                "a2",
+                "dev-b",
+                1,
+                "scored",
+                False,
+                scored_turn(seconds=21, passed=False, arguments=WRONG_DATES),
+            ),
+            *(ended("a2", "dev-c", n, "infrastructure", None) for n in (1, 2, 3)),
+        ],
+        "a3": [
+            ended("a3", "dev-a", 1, "scored", True, scored_turn(seconds=12)),
+            ended("a3", "dev-b", 1, "scored", True, scored_turn(seconds=22)),
+            ended("a3", "dev-c", 1, "errored", False),
+        ],
+    }
+    counts = {
+        "a1": TaskCounts(passed=2, failed=1),
+        "a2": TaskCounts(passed=1, failed=1, lost=1),
+        "a3": TaskCounts(passed=2, errored=1),
+    }
+    for index, (run_id, attempts) in enumerate(m1.items()):
+        write_attempts(
+            runs,
+            run_id,
+            attempts,
+            tasks=counts[run_id],
+            run_index=index + 1,
+            model=model_build("m1", m1_digests[index]),
+            unattributed_calls={"a1": 2, "a3": 1}.get(run_id, 0),
+        )
+    for index, run_id in enumerate(("b1", "b2", "b3")):
+        attempts = [
+            ended(
+                run_id,
+                "dev-a",
+                1,
+                "scored",
+                False,
+                scored_turn(
+                    seconds=3,
+                    passed=False,
+                    arguments=NO_SEARCH,
+                    precision=None,
+                    output=declined("parse_error"),
+                ),
+            ),
+            ended(run_id, "dev-b", 1, "scored", True, scored_turn(seconds=15)),
+            ended(
+                run_id,
+                "dev-c",
+                1,
+                "scored",
+                True,
+                scored_turn(seconds=4, arguments=None, precision=None, output=declined()),
+            ),
+        ]
+        write_attempts(
+            runs,
+            run_id,
+            attempts,
+            tasks=TaskCounts(passed=2, failed=1),
+            run_index=index + 1,
+            model=model_build("m2", "d2"),
+        )
+
+
+def build(runs: Path, **options: Any) -> Report:  # noqa: ANN401 - build_report's options
+    listed = collect_runs(
+        runs,
+        "dev",
+        [task.id for task in GOLDEN_TASKS],
+        golden=GOLDEN,
+        allow_dirty=options.pop("allow_dirty", False),
+    )
+    return build_report("dev", listed, GOLDEN_TASKS, **options)
+
+
+@pytest.fixture
+def scenario(tmp_path: Path) -> Report:
+    write_scenario(tmp_path)
+    return build(tmp_path)
+
+
+def model(found: Report, name: str) -> ModelSummary:
+    (summary,) = [m for m in found.models if m.model == name]
+    return summary
+
+
+class TestHeadline:
+    """Counts with 95% bootstrap intervals over whole tasks (docs/evaluation.md), lost tasks both ways."""
+
+    def test_lost_tasks_left_out(self, scenario: Report) -> None:
+        m1 = model(scenario, "m1")
+        assert m1.lost_excluded is not None
+        assert m1.lost_excluded.estimate == pytest.approx(
+            1 + 1 / 3 + 1 / 2
+        )  # dev-c: 1 of its 2 runs with a result
+        assert m1.with_result == 3
+
+    def test_lost_tasks_counted_as_failed(self, scenario: Report) -> None:
+        m1 = model(scenario, "m1")
+        assert m1.lost_failed.estimate == pytest.approx(1 + 1 / 3 + 1 / 3)
+        assert m1.tasks == 3
+
+    def test_the_intervals_hold_the_estimate_and_stay_within_the_tasks(self, scenario: Report) -> None:
+        for summary in scenario.models:
+            for interval, top in (
+                (summary.lost_excluded, summary.with_result),
+                (summary.lost_failed, summary.tasks),
+            ):
+                assert interval is not None
+                assert 0 <= interval.low <= interval.estimate <= interval.high <= top
+
+    def test_a_model_whose_runs_agree_still_has_an_interval_since_its_tasks_differ(
+        self, scenario: Report
+    ) -> None:
+        m2 = model(scenario, "m2")
+        assert m2.lost_failed.estimate == pytest.approx(2.0)
+        assert m2.lost_failed.low < 2.0 < m2.lost_failed.high  # resampling the tasks changes the count
+
+    def test_stability(self, scenario: Report) -> None:
+        assert model(scenario, "m1").stability == pytest.approx(1 / 3)  # dev-a only
+        assert model(scenario, "m2").stability == pytest.approx(1.0)
+
+    def test_each_task_with_its_results_in_run_order(self, scenario: Report) -> None:
+        assert model(scenario, "m1").per_task == {
+            "dev-a": ["passed", "passed", "passed"],
+            "dev-b": ["failed", "failed", "passed"],
+            "dev-c": ["passed", "lost", "errored"],
+        }
+
+    def test_each_category_descriptively(self, scenario: Report) -> None:
+        shares = model(scenario, "m1").per_category
+        assert list(shares) == ["single_search", "robustness", "out_of_scope"]  # in the golden set's order
+        assert shares["single_search"] == CategoryShare(passed=1.0, with_result=1, tasks=1)
+        assert shares["robustness"].passed == pytest.approx(1 / 3)
+        assert (shares["robustness"].with_result, shares["robustness"].tasks) == (1, 1)
+        assert shares["out_of_scope"] == CategoryShare(passed=0.5, with_result=1, tasks=1)
+
+    def test_the_runs_of_a_model_are_named_with_their_counts(self, scenario: Report) -> None:
+        m1 = model(scenario, "m1")
+        assert m1.runs == ["a1", "a2", "a3"]
+        assert m1.run_counts == [
+            TaskCounts(passed=2, failed=1),
+            TaskCounts(passed=1, failed=1, lost=1),
+            TaskCounts(passed=2, errored=1),
+        ]
+        assert (m1.digest, m1.server_versions) == ("d1", ["0.40.1"])
+
+
+class TestSecondary:
+    def test_the_first_search_call_and_the_last(self, scenario: Report) -> None:
+        m1 = model(scenario, "m1")
+        assert m1.last_call == Rate(part=4, whole=6)  # dev-a x3, dev-b in run 3
+        assert m1.first_call == Rate(part=3, whole=6)  # dev-a run 1 corrected itself; dev-b wrong twice
+
+    def test_over_refusal_and_over_clarification_on_turns_that_expected_a_search(
+        self, scenario: Report
+    ) -> None:
+        assert model(scenario, "m2").over_refusal == Rate(part=3, whole=6)
+        assert model(scenario, "m2").over_clarification == Rate(part=0, whole=6)
+        assert model(scenario, "m1").over_refusal == Rate(part=0, whole=6)
+
+    def test_scene_precision_and_recall(self, scenario: Report) -> None:
+        m1 = model(scenario, "m1")
+        assert m1.precision is not None
+        assert m1.precision.value == pytest.approx(5.5 / 6)
+        assert m1.precision.turns == 6
+        assert m1.recall == Mean(value=0.8, turns=1)
+        assert model(scenario, "m2").recall is None  # no task asked for a number of scenes
+
+    def test_failures_and_what_the_infrastructure_cost(self, scenario: Report) -> None:
+        m1 = model(scenario, "m1")
+        assert m1.model_failures == {}
+        assert model(scenario, "m2").model_failures == {"parse_error": 3}
+        assert m1.grounding_failures == 0
+        assert m1.errored == ["dev-c (run 3)"]
+        assert (m1.infrastructure_attempts, m1.lost, m1.unattributed_calls) == (4, 1, 3)  # of every run
+
+    def test_the_cost_of_a_task_over_its_scored_attempts(self, scenario: Report) -> None:
+        cost = model(scenario, "m1").cost
+        assert cost is not None
+        assert cost.tasks == 7  # every scored last attempt: dev-a x3, dev-b x3, dev-c in run 1
+        assert cost.median_seconds == 12.0  # of 5, 10, 11, 12, 20, 21, 22
+        assert cost.p90_seconds == pytest.approx(21.4)
+        assert cost.median_input_tokens == 400.0  # 100 + 300 on a delegated turn; a decline uses none here
+        assert cost.median_output_tokens == 40.0
+
+
+class TestComparison:
+    def test_the_sign_test_on_the_tasks_where_the_majorities_differ(self, scenario: Report) -> None:
+        (pair,) = scenario.comparisons
+        assert pair == Comparison(
+            first="m1",
+            second="m2",
+            first_only=1,
+            second_only=1,
+            both_passed=0,
+            both_failed=0,
+            left_out=1,
+            p_value=1.0,
+        )  # dev-a m1 only, dev-b m2 only, dev-c no majority for m1 (P against E)
+
+    def test_one_model_has_nothing_to_compare(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS)
+        found = collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN)
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        assert build_report("dev", found, tasks).comparisons == []
+
+
+class TestRefusals:
+    def test_runs_of_one_model_on_two_builds_are_refused(self, tmp_path: Path) -> None:
+        write_scenario(tmp_path, m1_digests=("d1", "d1", "d9"))
+        with pytest.raises(ReportError, match="m1 ran as more than one build: d1 in a1, d9 in a3"):
+            build(tmp_path)
+
+    def test_no_run_that_counts_gives_a_report_of_the_runs_alone(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", {}, status="running", tasks=TaskCounts())
+        found = build_report("dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), GOLDEN_TASKS)
+        assert (found.models, found.comparisons, [run.state for run in found.listed]) == ([], [], ["running"])
+
+
+class TestMarkdown:
+    def test_the_report_names_what_it_is_made_from_and_every_run(self, scenario: Report) -> None:
+        text = render_markdown(scenario)
+        assert text.startswith("# Evaluation report: dev split\n")
+        assert "Made from 6 runs that count, of 6 listed, on commit 0123456789ab.\n" in text
+        assert "| Recall | 0.80 over 1 turn |" in text
+        assert "| single_search | 1.0 of 1 (of 1 task) |" in text
+        assert "1 comparison;" in text
+        assert "Runs from a checkout with changes" not in text
+        for run_id in ("a1", "a2", "a3", "b1", "b2", "b3"):
+            assert f"| {run_id} |" in text
+        assert "| m1 | 1.8 of 3 (" in text
+        assert "| m1 | m2 | 1 | 1 | 1 | 1.00 |" in text
+        assert "dev-c (run 3)" in text
+        assert "(a question)" not in text  # the report never prints a task's text
+
+    def test_runs_that_do_not_count_are_listed_with_why(self, tmp_path: Path) -> None:
+        write_scenario(tmp_path)
+        (tmp_path / "x0").mkdir()
+        text = render_markdown(build(tmp_path))
+        assert "| x0 | did not start | it has no run.json |" in text
+
+    def test_a_report_with_scratch_runs_says_it_is_not_for_publication(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS, code=CodeVersion(commit=COMMIT, dirty=True))
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        found = build_report(
+            "dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN, allow_dirty=True), tasks
+        )
+        assert found.scratch
+        assert (
+            "Runs from a checkout with changes are in these numbers: not for publication."
+            in render_markdown(found)
+        )
+
+    def test_one_run_is_said_as_one(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS)
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        text = render_markdown(
+            build_report("dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), tasks)
+        )
+        assert "Made from 1 run that counts, of 1 listed, on commit 0123456789ab.\n" in text
+        assert "| one run only | 1 |" in text  # the same result in every run says nothing about one run
+
+    def test_runs_on_commits_that_differ_only_in_results_say_so(self, repo: Path) -> None:
+        first = git(repo, "rev-parse", "HEAD").strip()
+        (repo / "results").mkdir()
+        (repo / "results" / "note").write_text("a run record\n", encoding="utf-8")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "records")
+        second = git(repo, "rev-parse", "HEAD").strip()
+        runs = repo / "runs"
+        write_run(runs, "r1", ALL_PASS, code=CodeVersion(commit=first, dirty=False))
+        write_run(runs, "r2", ALL_PASS, code=CodeVersion(commit=second, dirty=False))
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        found = build_report("dev", collect_runs(runs, "dev", TASKS, golden=GOLDEN), tasks, root=repo)
+        on = ", ".join(sorted([first[:12], second[:12]]))
+        assert (
+            f"Made from 2 runs that count, of 2 listed, on commits {on}, which differ only in `results/`.\n"
+            in render_markdown(found)
+        )
+
+    def test_with_no_run_that_counts_the_report_says_so(self, tmp_path: Path) -> None:
+        text = render_markdown(build_report("dev", [], GOLDEN_TASKS))
+        assert "No run counts yet." in text
+
+
+class TestEdges:
+    def test_a_run_that_counts_without_its_record_cannot_be_made(self) -> None:
+        with pytest.raises(ValueError, match="a run that counts carries its record"):
+            ListedRun(folder="r1", state="reported")
+
+    def test_a_model_with_every_task_lost_has_no_cost_and_nothing_left_out(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", {task: [INFRA, INFRA, INFRA] for task in TASKS}, tasks=TaskCounts(lost=3))
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        found = build_report("dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), tasks)
+        (summary,) = found.models
+        assert (summary.cost, summary.lost_excluded, summary.with_result) == (None, None, 0)
+        assert summary.lost_failed.estimate == 0.0
+        assert (summary.lost, summary.infrastructure_attempts) == (3, 9)
+        assert summary.last_call == Rate(part=0, whole=0)
+        text = render_markdown(found)
+        assert "| qwen3.5:9b | none | 0.0 of 3 (" in text
+        assert "Seconds per task" not in text
+        assert "| Last search call with every argument right | none to count |" in text
+
+    def test_two_models_that_agree_are_counted_as_such(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS, model=model_build("m1"))
+        write_run(
+            tmp_path,
+            "r2",
+            {"dev-a": [FAIL], "dev-b": [PASS], "dev-c": [PASS]},
+            model=model_build("m2"),
+            tasks=TaskCounts(passed=2, failed=1),
+        )
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        (pair,) = build_report("dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), tasks).comparisons
+        assert (pair.first_only, pair.second_only, pair.both_passed, pair.both_failed, pair.left_out) == (
+            1,
+            0,
+            2,
+            0,
+            0,
+        )
+        assert pair.p_value == 1.0  # one task where they differ is no evidence
+
+
+class TestWhatTheScenarioDoesNotCover:
+    def tasks(self) -> list[Task]:
+        return [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+
+    def test_a_turn_that_cited_nothing_has_no_precision_to_average(self, tmp_path: Path) -> None:
+        cited_nothing = scored_turn(seconds=1).model_copy(update={"oracle": OracleCheck(ids=[SCENE.id])})
+        write_attempts(
+            tmp_path,
+            "r1",
+            [
+                ended("r1", "dev-a", 1, "scored", True, cited_nothing),
+                ended("r1", "dev-b", 1, "scored", True, scored_turn(seconds=1)),
+                ended("r1", "dev-c", 1, "scored", True, scored_turn(seconds=1)),
+            ],
+        )
+        (summary,) = build_report(
+            "dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), self.tasks()
+        ).models
+        assert summary.precision == Mean(value=1.0, turns=2)  # the share of nothing is not 0, it is undefined
+
+    def test_the_seconds_of_a_task_are_those_of_all_its_turns(self, tmp_path: Path) -> None:
+        two_turns = AttemptRecord(
+            run_id="r1",
+            task_id="dev-a",
+            attempt=1,
+            outcome="scored",
+            passed=True,
+            turns=[scored_turn(seconds=10), scored_turn(seconds=7)],
+        )
+        write_attempts(
+            tmp_path,
+            "r1",
+            [
+                two_turns,
+                ended("r1", "dev-b", 1, "scored", True, scored_turn(seconds=1)),
+                ended("r1", "dev-c", 1, "scored", True, scored_turn(seconds=2)),
+            ],
+        )
+        (summary,) = build_report(
+            "dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), self.tasks()
+        ).models
+        assert summary.cost is not None
+        # dev-a takes 10 + 7: of 1, 2, 17 the median is 2 and the 90th percentile 2 + 0.8 * (17 - 2) = 14.
+        assert summary.cost.median_seconds == 2.0
+        assert summary.cost.p90_seconds == pytest.approx(14.0)  # 8.4 if only a task's first turn counted
+        assert summary.cost.median_input_tokens == 400.0  # dev-a's two turns use 800: median of 800, 400, 400
+        assert summary.cost.tasks == 3
+
+    def test_the_tokens_of_a_task_add_its_decision_and_its_retrieval(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS)
+        (summary,) = build_report(
+            "dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), self.tasks()
+        ).models
+        assert summary.cost is not None
+        assert (summary.cost.median_input_tokens, summary.cost.median_output_tokens) == (400.0, 40.0)
+
+    def test_runs_on_other_prompts_are_not_reported_together(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS)
+        write_run(tmp_path, "r2", ALL_PASS, hashes=hashes(retrieval_prompt="0" * 64))
+        with pytest.raises(ReportError, match="r2 differs from r1 in retrieval_prompt"):
+            build_report("dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), self.tasks())
+
+    def test_a_reason_cannot_break_the_table(self, tmp_path: Path) -> None:
+        reason = "turn 1 raised ValueError: a | b\nsecond line"
+        write_run(tmp_path, "r1", {}, status="aborted", aborted_reason=reason, tasks=TaskCounts())
+        text = render_markdown(
+            build_report("dev", collect_runs(tmp_path, "dev", TASKS, golden=GOLDEN), self.tasks())
+        )
+        assert "| r1 | aborted | turn 1 raised ValueError: a / b second line | qwen3.5:9b |" in text

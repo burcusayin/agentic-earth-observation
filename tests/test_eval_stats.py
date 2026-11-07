@@ -14,6 +14,7 @@ from agentic_earth_observation.evals.stats import (
     bootstrap_interval,
     exact_sign_test,
     majority,
+    quantile,
     stability,
     task_share,
 )
@@ -205,3 +206,33 @@ class TestStability:
     def test_no_task_is_refused(self) -> None:
         with pytest.raises(ValueError, match="at least one task"):
             stability([])
+
+
+class TestQuantile:
+    @pytest.mark.parametrize(
+        ("values", "q", "expected"),
+        [
+            ([5.0, 10.0, 11.0, 12.0, 20.0, 21.0, 22.0], 0.5, 12.0),  # the middle one
+            ([5.0, 10.0, 11.0, 12.0, 20.0, 21.0, 22.0], 0.9, 21.4),  # 0.9 * 6 = 5.4: 21 + 0.4 * (22 - 21)
+            ([1.0, 2.0], 0.5, 1.5),  # between the two
+            ([7.0], 0.9, 7.0),
+            ([1.0, 2.0, 3.0], 0.0, 1.0),
+            ([1.0, 2.0, 3.0], 1.0, 3.0),
+        ],
+    )
+    def test_interpolates_between_the_nearest_values(
+        self, values: list[float], q: float, expected: float
+    ) -> None:
+        assert quantile(values, q) == pytest.approx(expected)
+
+    @pytest.mark.parametrize(
+        ("values", "q", "said"),
+        [
+            ([], 0.5, "at least one value"),
+            ([1.0], 1.5, "q must be between 0 and 1"),
+            ([2.0, 1.0], 0.5, "pass the values sorted"),
+        ],
+    )
+    def test_refuses_what_has_no_quantile(self, values: list[float], q: float, said: str) -> None:
+        with pytest.raises(ValueError, match=said):
+            quantile(values, q)

@@ -23,15 +23,17 @@ import sys
 import time
 from collections.abc import Callable, Coroutine, Sequence
 from datetime import date
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
 
-from agentic_earth_observation.config import Settings
-from agentic_earth_observation.evals.golden import SPLITS, GoldenError
+from agentic_earth_observation.config import ROOT, Settings
+from agentic_earth_observation.evals.golden import SPLITS, GoldenError, golden_hash, load_golden
 from agentic_earth_observation.evals.model_server import ModelServerError
-from agentic_earth_observation.evals.records import ProvenanceError, RunRecord
+from agentic_earth_observation.evals.records import OUTPUT_FOLDER, REPORTED_RUNS, ProvenanceError, RunRecord
+from agentic_earth_observation.evals.report import ReportError, build_report, collect_runs, render_markdown
 from agentic_earth_observation.evals.run_eval import (
     DEFAULT_RUNS,
     DEFAULT_SHUFFLE_SEED,
@@ -85,7 +87,25 @@ def main(argv: Sequence[str] | None = None, *, settings: Settings | None = None)
         default=DEFAULT_SHUFFLE_SEED,
         help="the seed of the task order (default: 1)",
     )
+    report_parser = commands.add_parser("report", help="the report on a split's runs, as markdown")
+    report_parser.add_argument("--split", choices=SPLITS, required=True, help="which split of the golden set")
+    report_parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=ROOT / OUTPUT_FOLDER / REPORTED_RUNS,
+        help=f"the folder of the runs' folders (default: {OUTPUT_FOLDER}/{REPORTED_RUNS})",
+    )
+    report_parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="count runs from a checkout with changes, for scratch use (the report then says so)",
+    )
+    report_parser.add_argument(
+        "--output", type=Path, help="write the report to this file instead of printing it"
+    )
     args = parser.parse_args(argv)
+    if args.command == "report":  # it reads records only: no settings, no server, no model
+        return _report(args)
     settings = settings or Settings()
     if args.command == "eval":
         return _evaluate(settings, args)
@@ -94,6 +114,34 @@ def main(argv: Sequence[str] | None = None, *, settings: Settings | None = None)
         asyncio.run(_chat_with_the_running_servers(settings, today))
     except KeyboardInterrupt:  # during a turn; at the prompt it simply ends the chat
         return INTERRUPTED
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    """Write the report on a split's runs. 0 when it was written, also when no run counts yet."""
+    try:
+        tasks = [task for task in load_golden() if task.split == args.split]
+        listed = collect_runs(
+            args.runs_dir,
+            args.split,
+            [task.id for task in tasks],
+            golden=golden_hash(),
+            allow_dirty=args.allow_dirty,
+        )
+        text = render_markdown(build_report(args.split, listed, tasks))
+    except (ReportError, GoldenError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    if args.output is None:
+        sys.stdout.write(text)
+        return 0
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text, encoding="utf-8")
+    except OSError as err:
+        print(f"error: the report cannot be written to {args.output}: {err.strerror}", file=sys.stderr)
+        return 1
+    print(f"report written to {args.output}")
     return 0
 
 

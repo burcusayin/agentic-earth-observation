@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from agentic_earth_observation import cli
 from agentic_earth_observation.config import Settings
-from agentic_earth_observation.evals.golden import GoldenError
+from agentic_earth_observation.evals.golden import GoldenError, golden_hash, load_golden
 from agentic_earth_observation.evals.model_server import ModelServerError
 from agentic_earth_observation.evals.records import (
     CodeVersion,
@@ -23,6 +23,7 @@ from agentic_earth_observation.evals.records import (
     ModelBuild,
     ProvenanceError,
     RunRecord,
+    TaskCounts,
 )
 from agentic_earth_observation.evals.run_eval import MODELS_UNDER_EVALUATION, EvaluationError
 from agentic_earth_observation.evals.servers import ServerError
@@ -30,6 +31,8 @@ from agentic_earth_observation.orchestrator.client import RetrievalAgentError
 from agentic_earth_observation.orchestrator.graph import Orchestrator
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalResult
 from tests.fakes import NEVER_FINISHES, SCENE, FakeClient, FakeOllama, OllamaStep, ollama_tool_call
+from tests.test_eval_report import PASS, write_run
+from tests.test_eval_report import hashes as report_hashes
 
 pytestmark = pytest.mark.anyio
 
@@ -441,3 +444,84 @@ async def test_the_real_chat_closes_its_client_without_any_request(
     monkeypatch.setattr("builtins.input", ended)
     monkeypatch.setattr("builtins.print", lambda *args: None)
     await cli._chat_with_the_running_servers(settings(), TODAY)
+
+
+class TestReport:
+    """`eo-agent report`: it reads records only, so it needs no settings, server or model."""
+
+    def dev_run(self, runs: Path, *, dirty: bool) -> None:
+        dev = [task.id for task in load_golden() if task.split == "dev"]
+        write_run(
+            runs,
+            "r1",
+            {task_id: [PASS] for task_id in dev},
+            task_order=dev,
+            tasks=TaskCounts(passed=len(dev)),
+            hashes=report_hashes(golden=golden_hash()),
+            code=CodeVersion(commit="0123456789abcdef0123456789abcdef01234567", dirty=dirty),
+        )
+
+    def test_with_no_runs_it_says_so_and_succeeds(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert cli.main(["report", "--split", "test", "--runs-dir", str(tmp_path / "none")]) == 0
+        out = capsys.readouterr().out
+        assert out.startswith("# Evaluation report: test split\n")
+        assert "No run counts yet." in out
+
+    def test_a_run_from_a_checkout_with_changes_counts_only_when_allowed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.dev_run(tmp_path, dirty=True)
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path)]) == 0
+        assert "| r1 | dirty checkout |" in capsys.readouterr().out
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path), "--allow-dirty"]) == 0
+        out = capsys.readouterr().out
+        assert "| r1 | counted |" in out
+        assert "not for publication" in out
+        assert "| qwen3.5:9b | 4.0 of 4 (" in out
+
+    def test_the_report_is_written_to_a_file_when_asked(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.dev_run(tmp_path / "runs", dirty=False)
+        target = tmp_path / "out" / "summary.md"
+        assert (
+            cli.main(
+                ["report", "--split", "dev", "--runs-dir", str(tmp_path / "runs"), "--output", str(target)]
+            )
+            == 0
+        )
+        assert capsys.readouterr().out == f"report written to {target}\n"
+        assert "| r1 | counted |" in target.read_text(encoding="utf-8")
+
+    def test_a_folder_of_runs_that_is_a_file_is_an_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "runs").write_text("", encoding="utf-8")
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path / "runs")]) == 1
+        captured = capsys.readouterr()
+        assert (captured.out, captured.err) == (
+            "",
+            "error: runs is not a folder: give the folder that holds the runs' folders\n",
+        )
+
+    def test_a_report_that_cannot_be_written_is_an_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "taken").write_text("", encoding="utf-8")
+        target = tmp_path / "taken" / "summary.md"  # its folder is a file
+        assert (
+            cli.main(
+                ["report", "--split", "dev", "--runs-dir", str(tmp_path / "none"), "--output", str(target)]
+            )
+            == 1
+        )
+        assert capsys.readouterr().err.startswith(f"error: the report cannot be written to {target}: ")
+
+    def test_it_reads_no_settings(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def no_settings() -> None:
+            raise AssertionError("the report needs no settings")
+
+        monkeypatch.setattr(cli, "Settings", no_settings)
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path)]) == 0
