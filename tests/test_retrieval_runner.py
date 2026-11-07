@@ -277,6 +277,9 @@ class TestTurns:
             300,
             30,
         )
+        # Ollama's own clock, summed over the three replies: the fake reports 0.1 s load, 0.5 s work each.
+        assert result.usage.model_seconds == pytest.approx(1.5)
+        assert result.usage.load_seconds == pytest.approx(0.3)
         offered = [sorted(t["function"]["name"] for t in sent["tools"]) for sent in server.requests]
         assert offered == [sorted(AGENT_TOOLS)] * 3
 

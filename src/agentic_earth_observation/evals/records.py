@@ -22,6 +22,7 @@ from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal, Self
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -38,6 +39,8 @@ ATTEMPTS_FILE = "attempts.jsonl"
 TOOL_LOG_FILE = "tool_calls.jsonl"
 MAX_ATTEMPTS = 3  # the first try, and two more after infrastructure failures (decision of 2026-11-02)
 OUTPUT_FOLDER = "results"  # what runs write; it does not make the checkout "dirty"
+RAW_RUNS = "raw"  # results/raw: scratch runs, not tracked
+REPORTED_RUNS = "runs"  # results/runs: runs for the report, from a clean checkout only
 
 RunStatus = Literal["running", "complete", "aborted"]
 # scored: the turns ran and were scored. infrastructure: a failure outside the model's control; the task is
@@ -120,7 +123,7 @@ class ModelBuild(BaseModel):
 
 
 class Hashes(BaseModel):
-    """SHA-256 of everything a score depends on besides the model."""
+    """SHA-256 of what a model reads and of what scores it. The record's commit covers the other code."""
 
     model_config = _RECORD
 
@@ -129,6 +132,18 @@ class Hashes(BaseModel):
     tool_descriptions: Sha256  # the tools as the retrieval agent receives them
     golden: Sha256
     evaluation_code: Sha256
+
+
+class TaskCounts(BaseModel):
+    """What the tasks a run finished came to. `lost`: every attempt fell to the infrastructure, so the task is
+    excluded from the scores, and counted here."""
+
+    model_config = _RECORD
+
+    passed: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    errored: int = Field(default=0, ge=0)
+    lost: int = Field(default=0, ge=0)
 
 
 class RunRecord(BaseModel):
@@ -140,7 +155,7 @@ class RunRecord(BaseModel):
     status: RunStatus
     aborted_reason: str | None = None
     split: Literal["dev", "test"]
-    run_index: int = Field(ge=1)  # which of the model's runs over this split this is
+    run_index: int = Field(ge=1)  # which of the model's runs in this evaluation this is
     started_at: AwareDatetime
     finished_at: AwareDatetime | None = None
     code: CodeVersion
@@ -149,6 +164,10 @@ class RunRecord(BaseModel):
     reference_date: date  # "today" for the agents
     shuffle_seed: int  # orders the tasks; the model's own seed is in model.options
     task_order: list[str] = Field(min_length=1)  # the task ids, in the order they ran
+    # Calls in the run's tool log under none of the run's trace ids: they change no attempt, and the report
+    # marks a run that has any (decision of 2026-11-06).
+    unattributed_calls: int = Field(default=0, ge=0)
+    tasks: TaskCounts = TaskCounts()
     settings: dict[str, Value]
     libraries: dict[str, str]
     platform: str
@@ -274,6 +293,12 @@ def code_version(root: Path = ROOT) -> CodeVersion:
     return CodeVersion(commit=commit, dirty=bool(changes.strip()))
 
 
+def uncommitted_runs(root: Path = ROOT) -> bool:
+    """Whether results/runs holds anything git does not: a run for the report that is not on record yet."""
+    folder = f"{OUTPUT_FOLDER}/{REPORTED_RUNS}"
+    return bool(_git(root, "status", "--porcelain", "--untracked-files=all", "--", folder).strip())
+
+
 def _git(root: Path, *arguments: str) -> str:
     git = shutil.which("git")
     if git is None:
@@ -307,7 +332,24 @@ def hashes(tool_descriptions: str) -> Hashes:
 def recorded_settings(settings: Settings) -> dict[str, Value]:
     """The settings a run record keeps: the named ones only, so that no secret or local path gets in."""
     values: dict[str, Value] = settings.model_dump(mode="json", include=set(RECORDED_SETTINGS))
-    return {name: values[name] for name in RECORDED_SETTINGS}
+    return {name: _without_credentials(values[name]) for name in RECORDED_SETTINGS}
+
+
+def _without_credentials(value: Value) -> Value:
+    """A URL as it may be published: a user name or password in it is left out."""
+    if not isinstance(value, str) or "@" not in value:
+        return value
+    parts = urlsplit(value)
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
+def _for_the_record(text: str) -> str:
+    """A record as it may be published: error messages from anywhere in the system can name a path of this
+    machine, and a record never does."""
+    for path, name in ((ROOT, "<repository>"), (Path.home(), "~")):
+        if len(path.parts) > 1:  # a home folder of `/` would otherwise rewrite every path and URL
+            text = text.replace(str(path), name)
+    return text
 
 
 def library_versions() -> dict[str, str]:
@@ -320,7 +362,7 @@ def write_run_record(folder: Path, record: RunRecord) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     draft = folder / f"{RUN_FILE}.tmp"
     with draft.open("w", encoding="utf-8") as out:
-        out.write(record.model_dump_json(indent=2) + "\n")
+        out.write(_for_the_record(record.model_dump_json(indent=2)) + "\n")
         out.flush()
         os.fsync(out.fileno())
     draft.replace(folder / RUN_FILE)
@@ -329,7 +371,7 @@ def write_run_record(folder: Path, record: RunRecord) -> None:
 def append_attempt(folder: Path, record: AttemptRecord) -> None:
     """Add one attempt to attempts.jsonl, and make sure it is on disk before the run goes on."""
     with (folder / ATTEMPTS_FILE).open("a", encoding="utf-8") as out:
-        out.write(record.model_dump_json() + "\n")
+        out.write(_for_the_record(record.model_dump_json()) + "\n")
         out.flush()
         os.fsync(out.fileno())
 
@@ -348,7 +390,10 @@ def read_run_record(folder: Path) -> RunRecord:
 
 
 def read_attempts(folder: Path) -> list[AttemptRecord]:
-    """Every attempt of a run, in the order they ended. A run that finished no attempt has no file: none."""
+    """Every attempt of a run, in the order they ended. A run that finished no attempt has no file: none.
+
+    A last line without its newline is an attempt whose writing was cut short, by a crash: it did not finish.
+    """
     path = folder / ATTEMPTS_FILE
     if not path.exists():
         return []
@@ -358,7 +403,7 @@ def read_attempts(folder: Path) -> list[AttemptRecord]:
         raise RecordError(f"cannot read {path} ({err.strerror})") from err
     attempts = []
     # Split on "\n" only: str.splitlines() also splits on U+2028 and the like, which JSON leaves unescaped.
-    for number, line in enumerate(text.split("\n"), start=1):
+    for number, line in enumerate(text.split("\n")[:-1], start=1):
         if not line.strip():
             continue
         try:

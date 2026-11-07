@@ -168,6 +168,15 @@ class TestStrictness:
         with pytest.raises(ValidationError):
             make_request(max_cloud_cover="10")
 
+    @pytest.mark.parametrize("value", [True, "12.35"])
+    def test_a_box_takes_numbers_only(self, value: object) -> None:
+        with pytest.raises(ValidationError):
+            BBox.model_validate({**ROME, "west": value})
+
+    def test_a_start_before_the_mission_says_when_to_start(self) -> None:
+        with pytest.raises(ValidationError, match="start on 2015-06-23 or later"):
+            make_request(dates={"start": "2015-01-01", "end": "2015-12-31"})
+
     def test_accepts_integers_for_coordinates_and_cloud_cover(self) -> None:
         assert BBox(west=12, south=41, east=13, north=42).west == 12
         assert make_request(max_cloud_cover=10).max_cloud_cover == 10

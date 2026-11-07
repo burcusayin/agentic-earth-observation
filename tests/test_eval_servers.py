@@ -10,6 +10,7 @@ the real servers on their ports; it needs no model and makes no catalogue search
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import signal
@@ -41,12 +42,15 @@ from agentic_earth_observation.evals.servers import (
     RunServers,
     ServerDied,
     ServerError,
+    _local_ports,
     agent_answers,
     port_open,
     served_tools,
     server_environment,
 )
+from agentic_earth_observation.orchestrator.client import A2ARetrievalClient
 from agentic_earth_observation.retrieval_agent.a2a_server import RetrievalExecutor, build_app
+from agentic_earth_observation.retrieval_agent.models import RetrievalRequest
 from tests.fakes import FakeCatalog, ScriptedModel
 
 pytestmark = pytest.mark.anyio
@@ -197,10 +201,10 @@ class StandIns:
 
     async def served_tools(self, config: Settings) -> list[Tool]:
         self.checks.append("tools")
-        if self.tool_failures:
-            raise self.tool_failures.pop(0)
         if self.during_tool_check is not None:
             self.during_tool_check()
+        if self.tool_failures:
+            raise self.tool_failures.pop(0)
         return TOOLS
 
     async def agent_answers(self, config: Settings) -> None:
@@ -342,23 +346,23 @@ class TestStart:
         ("changes", "said"),
         [
             pytest.param(
-                {"mcp_url": "http://127.0.0.1:9001/mcp"},
-                "EO_MCP_URL must be http://127.0.0.1:8001",
-                id="port",
-            ),
-            pytest.param(
                 {"mcp_url": "http://example.org:8001/mcp"},
-                "EO_MCP_URL must be http://127.0.0.1:8001",
+                "EO_MCP_URL must be http://127.0.0.1:<port>",
                 id="host",
             ),
             pytest.param(
                 {"mcp_url": "https://127.0.0.1:8001/mcp"},
-                "EO_MCP_URL must be http://127.0.0.1:8001",
+                "EO_MCP_URL must be http://127.0.0.1:<port>",
                 id="https",
             ),
             pytest.param(
                 {"mcp_url": "http://127.0.0.1:port/mcp"},
-                "EO_MCP_URL must be http://127.0.0.1:8001",
+                "EO_MCP_URL must be http://127.0.0.1:<port>",
+                id="a port that is no number",
+            ),
+            pytest.param(
+                {"mcp_url": "http://127.0.0.1/mcp"},
+                "EO_MCP_URL must be http://127.0.0.1:<port>",
                 id="no port",
             ),
             pytest.param(
@@ -374,6 +378,26 @@ class TestStart:
         with pytest.raises(ServerError, match=re.escape(said)):
             await stand_ins.servers(config=settings(**changes)).start()
         assert stand_ins.events() == []
+
+    def test_the_ports_are_the_ones_the_urls_name(self) -> None:
+        config = settings(mcp_url="http://127.0.0.1:9001/mcp", a2a_url="http://localhost:9100")
+        assert _local_ports(config) == (9001, 9100)
+
+    async def test_a_ctrl_c_that_arrives_as_another_error_is_not_swallowed(self, stand_ins: StandIns) -> None:
+        # anyio can replace a cancellation by an error group when a child fails at the same moment.
+        def cancel_this_task() -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+
+        stand_ins.during_tool_check = cancel_this_task
+        stand_ins.tool_failures = [OSError("the child's failure")] * 10_000
+        started = time.monotonic()
+        starting = asyncio.ensure_future(stand_ins.servers().start())
+        with pytest.raises(OSError, match="the child's failure"):
+            await starting
+        assert time.monotonic() - started < 5  # it did not wait out the limit of 10 s
+        assert stand_ins.events() == ["mcp started", "mcp stopped"]
 
     async def test_localhost_is_this_machine_too(self, stand_ins: StandIns) -> None:
         config = settings(mcp_url="http://localhost:8001/mcp", a2a_url="http://localhost:8002")
@@ -446,7 +470,7 @@ class TestStart:
     async def test_a_server_that_died_while_another_answered_for_it_is_not_ready(
         self, stand_ins: StandIns
     ) -> None:
-        # What the prototype showed: an older server on the port answers the check, and the new one exits.
+        # As measured on the real servers: an older one on the port answers the check, and the new one exits.
         stand_ins.during_tool_check = lambda: end(stand_ins.pid(MCP_PORT))
         with pytest.raises(ServerError) as failed:
             await stand_ins.servers().start()
@@ -594,7 +618,7 @@ class TestRestart:
     async def test_an_agent_that_ignores_the_signal_is_killed_and_replaced_while_the_run_goes_on(
         self, stand_ins: StandIns
     ) -> None:
-        # The retrieval agent does not stop on SIGTERM while a turn is in flight (the prototype).
+        # The retrieval agent does not stop on SIGTERM while a turn is in flight (as measured).
         ticks: list[float] = []
 
         async def tick() -> None:
@@ -690,6 +714,47 @@ class TestProbe:
 
 
 @pytest.mark.integration
+async def test_a_client_gives_up_on_a_turn_and_reaches_the_agent_that_replaces_the_busy_one(
+    tmp_path: Path,
+) -> None:
+    # What a turn past a timeout looks like: the agent goes on with it, holding the model, until replaced.
+    held: list[asyncio.StreamWriter] = []
+    asked = asyncio.Event()
+
+    async def a_model_server_that_never_answers(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        held.append(writer)
+        asked.set()
+        with contextlib.suppress(ConnectionError):
+            while await reader.read(65536):
+                pass
+
+    model_server = await asyncio.start_server(a_model_server_that_never_answers, "127.0.0.1", 0)
+    config = settings(ollama_url=f"http://127.0.0.1:{model_server.sockets[0].getsockname()[1]}")
+    request = RetrievalRequest(text="Sentinel-2 scenes of Milan from March 2025", today=date(2025, 12, 15))
+    try:
+        async with RunServers(config, tmp_path / "run") as servers, A2ARetrievalClient(config) as client:
+            abandoned = asyncio.ensure_future(client.retrieve(request, "abandoned"))
+            await asyncio.wait_for(asked.wait(), 30)
+            abandoned.cancel()
+            await asyncio.wait({abandoned})
+            assert abandoned.cancelled()
+            await servers.restart_agent()
+            servers.check()
+            asked.clear()
+            again = asyncio.ensure_future(client.retrieve(request, "again"))
+            await asyncio.wait_for(asked.wait(), 30)  # the same client got through to the new agent
+            assert len(held) == 2
+            again.cancel()
+            await asyncio.wait({again})
+    finally:
+        model_server.close()
+    assert not port_open(MCP_PORT)
+    assert not port_open(AGENT_PORT)
+
+
+@pytest.mark.integration
 async def test_the_real_servers_start_answer_and_stop(tmp_path: Path) -> None:
     config = settings()
     folder = tmp_path / "run"
@@ -700,7 +765,8 @@ async def test_the_real_servers_start_answer_and_stop(tmp_path: Path) -> None:
         assert port_open(MCP_PORT)
         assert port_open(AGENT_PORT)
         assert servers.tool_descriptions == tool_descriptions_hash(in_process)
-        assert (folder / TOOL_LOG_FILE).exists()  # the MCP server opened the run's log, not the default one
+        # The MCP server opened the run's log, not the default one, and the ready checks are not tool calls.
+        assert (folder / TOOL_LOG_FILE).read_text(encoding="utf-8") == ""
         servers.check()
         with pytest.raises(ServerError, match="something already answers on port 8001"):
             await RunServers(config, tmp_path / "second").start()

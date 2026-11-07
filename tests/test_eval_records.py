@@ -43,6 +43,7 @@ from agentic_earth_observation.evals.records import (
     read_attempts,
     read_run_record,
     recorded_settings,
+    uncommitted_runs,
     write_run_record,
 )
 from agentic_earth_observation.evals.scoring import ArgumentScore, TurnScore
@@ -221,6 +222,13 @@ def test_a_write_that_fails_part_way_leaves_the_earlier_record(
 def test_a_run_record_that_contradicts_itself_is_refused(changes: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         run_record(**changes)
+
+
+def test_a_run_counts_the_calls_it_cannot_tie_to_a_task() -> None:
+    assert run_record().unattributed_calls == 0
+    assert run_record(unattributed_calls=2).unattributed_calls == 2
+    with pytest.raises(ValidationError, match="unattributed_calls"):
+        run_record(unattributed_calls=-1)
 
 
 def test_a_run_ends_complete_or_aborted_with_its_reason() -> None:
@@ -611,6 +619,22 @@ def test_what_runs_write_under_results_does_not_make_the_checkout_dirty(repo: Pa
     assert code_version(repo).dirty is False
 
 
+def test_a_run_for_the_report_that_is_not_committed_is_noticed_until_it_is(repo: Path) -> None:
+    assert uncommitted_runs(repo) is False
+    write(repo / "results" / "runs" / RUN_ID / RUN_FILE)
+    assert uncommitted_runs(repo) is True
+    git(repo, "add", ".")
+    assert uncommitted_runs(repo) is True  # staged is not on record yet
+    git(repo, "commit", "--quiet", "-m", "a run")
+    assert uncommitted_runs(repo) is False
+
+
+def test_scratch_runs_and_server_logs_are_not_runs_waiting_to_be_committed(repo: Path) -> None:
+    write(repo / "results" / "raw" / RUN_ID / RUN_FILE)
+    write(repo / "results" / "runs" / RUN_ID / "mcp_server.log")  # ignored, as *.log is in the real checkout
+    assert uncommitted_runs(repo) is False
+
+
 def test_a_changed_result_that_was_committed_does_not_make_the_checkout_dirty(repo: Path) -> None:
     write(repo / "results" / "runs" / "summary.md")
     git(repo, "add", ".")
@@ -675,3 +699,58 @@ def test_a_written_run_record_is_plain_json_with_the_documented_fields(tmp_path:
     }
     assert stored["shuffle_seed"] == 42
     assert stored["reference_date"] == "2025-12-15"
+
+
+class TestWhatMayBePublished:
+    def test_a_path_of_this_machine_never_reaches_a_run_record(self, tmp_path: Path) -> None:
+        reason = f"ValueError: {ROOT}/results/raw/x/tool_calls.jsonl:1 and {Path.home()}/.ollama/models/blob"
+        ended = STARTED + timedelta(minutes=30)
+        write_run_record(tmp_path, run_record(status="aborted", finished_at=ended, aborted_reason=reason))
+        text = (tmp_path / RUN_FILE).read_text(encoding="utf-8")
+        assert str(ROOT) not in text
+        assert str(Path.home()) not in text
+        assert read_run_record(tmp_path).aborted_reason == (
+            "ValueError: <repository>/results/raw/x/tool_calls.jsonl:1 and ~/.ollama/models/blob"
+        )
+
+    def test_a_path_of_this_machine_never_reaches_an_attempt_record(self, tmp_path: Path) -> None:
+        reason = f"turn 1 raised OSError: [Errno 13] Permission denied: '{ROOT}/x'"
+        turn = TurnRecord(trace_id="t01-a1-u1", seconds=1.0, error=reason)
+        record = AttemptRecord(
+            run_id=RUN_ID,
+            task_id="dev-s2-milan-march",
+            attempt=1,
+            outcome="errored",
+            passed=False,
+            reason=reason,
+            turns=[turn],
+        )
+        append_attempt(tmp_path, record)
+        assert str(ROOT) not in (tmp_path / ATTEMPTS_FILE).read_text(encoding="utf-8")
+        (read,) = read_attempts(tmp_path)
+        assert read.reason == "turn 1 raised OSError: [Errno 13] Permission denied: '<repository>/x'"
+
+    def test_a_home_folder_at_the_root_rewrites_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: Path("/"))
+        write_run_record(tmp_path, run_record())
+        assert read_run_record(tmp_path) == run_record()
+
+    @pytest.mark.parametrize(
+        ("url", "recorded"),
+        [
+            ("http://user:s3cret@127.0.0.1:11434", "http://127.0.0.1:11434"),
+            ("https://token@models.example/v1", "https://models.example/v1"),
+            ("http://127.0.0.1:11434", "http://127.0.0.1:11434"),
+        ],
+    )
+    def test_a_password_in_a_url_is_left_out(self, url: str, recorded: str) -> None:
+        config = Settings(_env_file=None, ollama_url=url)  # type: ignore[call-arg]  # a pydantic-settings init option
+        assert recorded_settings(config)["ollama_url"] == recorded
+
+
+def test_an_attempt_whose_writing_was_cut_short_did_not_finish(tmp_path: Path) -> None:
+    line = attempt().model_dump_json()
+    (tmp_path / ATTEMPTS_FILE).write_text(f"{line}\n{line[:40]}", encoding="utf-8")
+    assert len(read_attempts(tmp_path)) == 1

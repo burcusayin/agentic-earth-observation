@@ -157,7 +157,7 @@ decision is made or reversed; do not rewrite old entries.
     - what happens: the task is retried with a fresh trace id, at most twice (at temperature 0 a run repeats
       itself), excluded from the scores, and counted in the report next to each model's latency.
   - **Grounding holds by construction:** answers are built from templates and cite only ids the tools returned,
-    so the write-up reports grounding as a property of the design, not of the model.
+    so the report states grounding as a property of the design, not of the model.
 - **How one retrieval turn becomes a result** (`run_retrieval` and `result_from_turn` in `agent.py`).
   - **The status comes from the tools' results only,** never from the model's text.
     - The last successful search gives `ok` or `empty`, with its scenes and its arguments as sent.
@@ -195,7 +195,7 @@ decision is made or reversed; do not rewrite old entries.
 - **ChatOllama's repair of list arguments belongs to the serving stack.** When a model writes a list or an object
   as text (`"[9.04, ...]"`), langchain-ollama parses it before the call reaches our server, which then never
   sees the text that it would refuse (decision above). langchain-mistralai does not do this. The repair is part
-  of the local-against-API difference the evaluation measures, and the write-up states it.
+  of the local-against-API difference the evaluation measures, and the report states it.
 
 ## 2026-11-03
 - **How the retrieval agent is served over A2A** (`retrieval_agent/a2a_server.py`, a2a-sdk 1.2.2). Checked by
@@ -249,7 +249,7 @@ decision is made or reversed; do not rewrite old entries.
   - **The conversation memory holds only plain values and JSON text.** LangGraph's checkpointer restores our
     own classes only if each one is registered, warns otherwise, and returns an unregistered one, such as a
     nested enum, silently changed.
-- **The assistant can take an answer to its own question** (her request, which goes beyond Milestone 1's plan).
+- **The assistant can take an answer to its own question** (the maintainer's request, which goes beyond Milestone 1's plan).
   Found in the first end-to-end chat: each turn was decided alone, so "Yes" or a place name given in answer
   meant nothing.
   - The orchestrator remembers the question its last turn asked (a clarification, or an unknown place with
@@ -358,11 +358,11 @@ decision is made or reversed; do not rewrite old entries.
   fails the required tools, as a model's own failure should; counting every such turn as infrastructure would
   retry and exclude it. Only when the agent's result shows that a tool ran (`ok`, `empty`, `unknown_place` or
   `error`) and the log has no call for it do the agent and the log disagree, and that attempt is `errored`.
-- **The two Mistral API models are run last, after the local runs.** If they cannot be run by then, the first
+- **The two Mistral API models are run last, after the local runs.** Until they have run, the first
   release reports the local models, and the API runs move to the follow-up milestones.
 - **What a run record's dirty flag covers** (`evals/records.py`).
   - Tracked files with changes, staged or not, and untracked files that are not ignored.
-  - Not `results/`, which holds what runs write: otherwise the first run of a night would make every later
+  - Not `results/`, which holds what runs write: otherwise the first run of an evaluation would make every later
     one dirty.
   - git is asked for untracked files explicitly, because a user's git configuration can hide them, and the
     checkout must be the top of its own repository, so that a folder inside another repository is never
@@ -408,8 +408,8 @@ decision is made or reversed; do not rewrite old entries.
 - **Tool calls recorded under none of the run's trace ids change no attempt.** They cannot be tied to a task,
   so excluding or failing a task for them would be a guess. The runner counts them in the run record, and the
   report marks such a run.
-- **The run's servers** (`evals/servers.py`), from what two prototypes showed on the real servers started as
-  child processes (no model, no catalogue search):
+- **The run's servers** (`evals/servers.py`), from measurements of the real servers started as child processes
+  (no model, no catalogue search):
   - **Nothing may answer on a server's port before the run starts it.** With an older server on the port, a
     new one looks ready within 0.01 s, because the older one answers, and exits a moment later. So the runner
     refuses to start while either port answers, and a server counts as ready only while its process runs.
@@ -427,13 +427,13 @@ decision is made or reversed; do not rewrite old entries.
     nothing scored. A crashed server is a bug in our own system, as the third errored task is; the rest of one
     run of 18 tasks costs little to repeat, while a task scored after a crash of unknown cause can move the
     result by 5.6 points. The paid runs are the one place where this costs money: to be looked at again
-    before Part 4.
+    before any of them.
   - The reason kept in the run record names the server's log file in the run's folder, never a path of this
     machine.
 - **The harness timeout** (to be built into the runner): a turn runs as a task, and the runner waits for it
   with `asyncio.wait(timeout=EO_HARNESS_TIMEOUT_S)`, which returns on time whatever the task does; never with
   `asyncio.timeout` or `wait_for`, which return late when a call swallows cancellation (6 s under a 1 s limit
-  in the prototype). On a timeout the attempt is `infrastructure` ("the turn ran past the harness timeout"),
+  when measured). On a timeout the attempt is `infrastructure` ("the turn ran past the harness timeout"),
   and the retrieval agent is restarted before the next attempt: it goes on with the abandoned turn (the A2A
   SDK continues a disconnected client's task in the background) and holds the model meanwhile. A new agent is
   ready in under a second.
@@ -442,3 +442,73 @@ decision is made or reversed; do not rewrite old entries.
   `RetrievalAgentError`. Over a real connection the client's call is cancelled as any other: `asyncio.timeout(2)`
   raised at 2.0 s, and the client stayed usable. The docstring of `orchestrator/client.py` says so now. A call
   is still bounded by the HTTP timeout; the harness timeout above is the second bound.
+
+## 2026-11-07
+An adversarial review of the runner, the agents and the evaluation, by separate read-only Claude Code sessions,
+and the first real runs on the dev split. What came of them:
+
+- **The retrieval agent is replaced after every attempt lost to the infrastructure, and after an errored one,**
+  not only after a harness timeout (revising 2026-11-06). An A2A timeout leaves it at the abandoned turn just the
+  same, and a new agent is ready in under a second.
+- **A task is tried again only after a 30 s pause,** so that a short outage does not take all three attempts.
+- **The third task lost to the infrastructure aborts the run,** in a row or not. A run ended `complete` with almost
+  everything excluded, which is what 2026-11-06 refused for a dead server. The final record now holds how many
+  tasks passed, failed, errored and were lost, and the command prints them.
+- **An evaluation stops at its first aborted run.** The next runs would meet the same broken system; a person
+  looks first. It is a choice about time, easy to reverse.
+- **The test split runs only for the report:** from a clean checkout, in 3 runs per model and the one fixed order,
+  and only when `results/runs/` holds nothing uncommitted, so that every such run stays on record. A run that was
+  never committed can still be deleted by hand; these rules make that a deliberate act, not an accident.
+- **The frozen files are checked mechanically:** tests and a run for the report compare them with hashes taken at
+  tag `golden-test-v1`.
+- **A checkout that changes during an evaluation aborts it.** The servers import the checkout at each start, the
+  runner keeps the code it began with, and the record would name the wrong commit.
+- **A catalogue that returns nothing aborts the run.** `score_turn` takes the run's own search as the truth about
+  whether scenes exist, so an empty catalogue, or a client that drops everything, would pass every search as "none
+  found", with the oracle agreeing. The golden set has one task without results; a second aborts.
+- **What the oracle query records:** no precision for a turn that cites nothing (the share of nothing is
+  undefined, and `retrieval_metrics` would answer 0 or 1); recall over what the tools returned, as
+  `docs/evaluation.md` says, so a model failure after a good search is not recall 0; no metrics on an attempt that
+  is not scored; and a catalogue refusing the expected search is a bug that aborts the run.
+- **A record never names a path of this machine.** Error messages can, so `run.json` and `attempts.jsonl` are
+  scrubbed as they are written, and a password in a recorded URL is left out. Server logs stay out of git.
+- **The catalogue client goes to the configured catalogue only** (`catalog/stac.py`). pystac-client follows the links
+  in a catalogue's answers with the method, headers and body they name, and our local servers trust a caller
+  without an Origin header, so a hostile answer could have forged tool-log records or started a turn. A link to
+  another origin and any redirect are refused, and fail the search.
+- **A bug of ours no longer counts as a failure of the catalogue.** Building the search stands outside the error
+  handling, and a 4xx (other than 408 and 429) is `CatalogRefused`, error kind `other`: errored, not excluded.
+- **Scene ids have the shape of a Sentinel product id, and cloud cover is a real number.** The id is the one text
+  a model and the answer repeat; now it cannot carry a sentence, so no other text from the catalogue reaches a
+  model, and the retrieval prompt stays as it was tuned. Checked against the ids in the recorded responses and in
+  real runs.
+- **Ollama's own trouble is infrastructure** (revising 2026-11-02 for these cases): its messages for a runner that
+  died, did not start, or a model too large for memory, read from the binary of version 0.40.1. On a machine
+  short of memory these would otherwise have lowered a model's score. Every other 500 stays the model's failure,
+  and a parser error stays one even when the text it quotes holds those words.
+- **Clients of a server on this machine ignore proxy settings.** With `HTTP_PROXY` set, requests to 127.0.0.1 went
+  to the proxy, the user's words included.
+- **A reply may ask for at most 8 tool calls at once;** more fails the turn as `step_limit`, with none of them
+  run. They would all start together, and each search reaches a public service. A turn needs two or three.
+- **The search of a failed turn is not what a follow-up continues:** the user was told that the turn failed.
+- **`EO_MCP_URL` names the MCP server's port,** as `EO_A2A_URL` does the agent's, so a stranger with port 8001 busy
+  can move it.
+- **Run records keep Ollama's own timings** (promised on 2026-11-03): model time and load time per turn. On the
+  dev runs no turn spent more than 0.15 s loading, so loading the model before the first task does what it should.
+- **The commit checks in CI were emptier than they read:** both the gitleaks hook and the private-files hook look at
+  staged changes, and CI has none. CI now scans the whole history with gitleaks, and the private-files hook checks
+  every tracked name when nothing is staged. The list of private strings exists only on the maintainer's machine.
+- **Left as they are, with the reason:**
+  - An MCP answer the client cannot read waits for the timeout and counts as infrastructure (2026-11-02). It takes
+    a garbled answer from our own server, and no such thing has been seen.
+  - A turn with a model failure and a catalogue failure counts as infrastructure: the order of 2026-11-06, because
+    the catalogue failure may have caused the other.
+  - The A2A server keeps finished tasks, and has no limit on a request's size. It is local, single-user, and
+    restarted for every run.
+  - A catalogue that drips an answer keeps a worker thread after the deadline: the tool still answers on time.
+  - The leakage test skips `evals/` and `scripts/build_gazetteer.py` (which `docs/evaluation.md`, frozen, does not
+    say), the first word of a sentence, and words in another case, other than gazetteer names. Widening it would
+    give failures that could only be understood by reading the test split. Its failures now print a count.
+  - Two latent defects in the frozen files: `golden.py` requires `search_scenes` for any expected search, so another
+    accepted route could never pass, and `scoring.py` accepts any status on a turn with no search and no
+    `outcomes`. A check that prints only counts finds no such turn in either split, so no score changes.

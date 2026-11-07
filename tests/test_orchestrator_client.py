@@ -450,3 +450,9 @@ class TestLifecycle:
             results = await asyncio.gather(*(client.retrieve(REQUEST, f"turn-{i}") for i in range(3)))
         assert results == [FOUND] * 3
         assert transport.seen.count("POST /a2a") == 3
+
+
+async def test_a_client_of_this_machine_ignores_proxy_settings() -> None:
+    # A request to a local server cannot get there through a proxy, and would hand the user's words to it.
+    async with A2ARetrievalClient(Settings(_env_file=None)) as client:  # type: ignore[call-arg]  # a pydantic-settings init option
+        assert client.http.trust_env is False

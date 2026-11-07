@@ -29,7 +29,7 @@ from a2a.types.a2a_pb2 import Message, Part, Role, SendMessageRequest, StreamRes
 from pydantic import ValidationError
 
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, TRACE_ID_RULE
-from agentic_earth_observation.config import Settings
+from agentic_earth_observation.config import Settings, is_local_url
 from agentic_earth_observation.failures import NETWORK_FAILURES
 from agentic_earth_observation.retrieval_agent.models import (
     A2A_MEDIA_TYPE,
@@ -56,7 +56,9 @@ class A2ARetrievalClient:
     def __init__(self, settings: Settings, *, http: httpx.AsyncClient | None = None) -> None:
         self.url = settings.a2a_url
         # httpx's default timeout is 5 s; a turn may take up to EO_TURN_DEADLINE_S, which is shorter than this
-        self.http = http or httpx.AsyncClient(timeout=httpx.Timeout(settings.a2a_timeout_s))
+        self.http = http or httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.a2a_timeout_s), trust_env=not is_local_url(settings.a2a_url)
+        )
         self._client: Client | None = None  # made from the agent card on first use
 
     async def __aenter__(self) -> Self:

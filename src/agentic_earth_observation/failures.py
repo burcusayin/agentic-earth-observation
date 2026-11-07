@@ -12,7 +12,7 @@ import httpx
 from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED
 
-from agentic_earth_observation.llm import model_server_busy
+from agentic_earth_observation.llm import model_server_failed
 
 # A connection that times out, cannot be made, or breaks. HTTP errors are not here: a server's answer is not a
 # failure of the network, and our own servers answering with an error have a bug or a wrong setting.
@@ -31,7 +31,7 @@ def is_infrastructure(err: BaseException) -> bool:
         return True
     if isinstance(err, McpError):
         return err.error.code in (MCP_TIMED_OUT, CONNECTION_CLOSED)
-    return model_server_busy(err)
+    return model_server_failed(err)
 
 
 def leaves(err: BaseException) -> list[BaseException]:

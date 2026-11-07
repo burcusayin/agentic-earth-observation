@@ -16,12 +16,13 @@ from langchain_ollama import ChatOllama
 from pydantic import ValidationError
 
 from agentic_earth_observation import config
-from agentic_earth_observation.config import ROOT, Settings
+from agentic_earth_observation.config import ROOT, Settings, is_local_url
 from agentic_earth_observation.llm import (
     OLLAMA_CONTEXT,
     SEED,
     build_chat_model,
-    model_server_busy,
+    model_seconds,
+    model_server_failed,
     unreadable_reply,
 )
 
@@ -224,7 +225,7 @@ def test_env_example_is_a_valid_configuration() -> None:
     assert s == settings()  # its values are the defaults
 
 
-def test_the_ollama_model_gets_the_agreed_options() -> None:
+def test_the_ollama_model_gets_the_options_of_the_decisions_log() -> None:
     s = settings(llm_model="ministral-3:8b")
     model = build_chat_model(s)
     assert isinstance(model, ChatOllama)
@@ -236,7 +237,72 @@ def test_the_ollama_model_gets_the_agreed_options() -> None:
     assert model.reasoning is False
     assert model.keep_alive == "30m"
     assert model.num_predict == s.num_predict
-    assert model.client_kwargs == {"timeout": s.model_timeout_s}
+    assert model.client_kwargs == {"timeout": s.model_timeout_s, "trust_env": False}
+
+
+def test_a_model_server_elsewhere_may_go_through_the_proxy_settings() -> None:
+    model = build_chat_model(settings(ollama_url="https://models.example:11434"))
+    assert isinstance(model, ChatOllama)
+    assert model.client_kwargs is not None
+    assert model.client_kwargs["trust_env"] is True
+
+
+@pytest.mark.parametrize(
+    ("url", "local"),
+    [
+        ("http://127.0.0.1:11434", True),
+        ("http://localhost:8002", True),
+        ("https://earth-search.aws.element84.com/v1", False),
+        ("http://localhost.evil.example:8001", False),
+    ],
+)
+def test_a_local_url_names_this_machine(url: str, local: bool) -> None:
+    assert is_local_url(url) is local
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "llama-server process no longer running: -1 ",
+        "timed out waiting for llama-server to start: context deadline exceeded",
+        "model is too large for system memory",
+    ],
+)
+@pytest.mark.parametrize("status", [500, -1])
+def test_the_model_servers_own_trouble_is_infrastructure(message: str, status: int) -> None:
+    # Whatever the model wrote: its score must not pay for a machine short of memory.
+    err = ollama.ResponseError(message, status)
+    assert model_server_failed(err)
+    assert unreadable_reply(err) is None
+
+
+def test_words_of_the_model_quoted_by_the_parser_are_the_models_failure() -> None:
+    err = ollama.ResponseError("error parsing tool call: raw='process no longer running', err=bad", 500)
+    assert not model_server_failed(err)
+    assert unreadable_reply(err) is not None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        pytest.param(
+            {
+                "load_duration": 2_000_000_000,
+                "prompt_eval_duration": 500_000_000,
+                "eval_duration": 1_500_000_000,
+            },
+            (2.0, 2.0),
+            id="all three",
+        ),
+        pytest.param({"eval_duration": 1_000_000_000}, (1.0, 0.0), id="no load"),
+        pytest.param({}, (0.0, 0.0), id="from another server"),
+        pytest.param({"eval_duration": "soon"}, (0.0, 0.0), id="not a number"),
+    ],
+)
+def test_the_model_servers_clock_is_read_in_seconds(
+    metadata: dict[str, object], expected: tuple[float, float]
+) -> None:
+    assert model_seconds(metadata) == expected
 
 
 def test_mistral_is_not_wired_up_yet() -> None:
@@ -267,7 +333,7 @@ def test_the_model_servers_errors_are_read_by_status(
     err: BaseException, busy: bool, unreadable: str | None
 ) -> None:
     # Ollama 0.40.1 reports a reply its parser cannot read as 500, or inside the stream; busy is 503.
-    assert model_server_busy(err) is busy
+    assert model_server_failed(err) is busy
     assert unreadable_reply(err) == unreadable
 
 

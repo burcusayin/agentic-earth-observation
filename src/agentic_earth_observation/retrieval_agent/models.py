@@ -88,6 +88,11 @@ class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     seconds: float = 0.0
+    # The model server's own clock, so that a slow machine can be told from a slow model afterwards.
+    model_seconds: float = 0.0  # reading the prompts and writing the replies
+    load_seconds: float = (
+        0.0  # loading the model into memory: a fraction of a second, once a run has loaded it
+    )
 
 
 class RetrievalResult(BaseModel):

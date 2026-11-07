@@ -6,16 +6,21 @@ The server is built with a fake catalogue (no network) and the committed gazette
 from __future__ import annotations
 
 import copy
+import re
 from datetime import date
+from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import CallToolResult, TextContent
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.catalog_mcp import server as server_module
 from agentic_earth_observation.catalog_mcp.server import build_server, tool_descriptions_hash
+from agentic_earth_observation.config import Settings
 from agentic_earth_observation.domain import Product
 from tests.fakes import ROME_JULY, SCENE, BlockingCatalog, FakeCatalog
 
@@ -301,7 +306,100 @@ async def test_dns_rebinding_protection_is_on_for_localhost_only() -> None:
     security = server().settings.transport_security
     assert security is not None
     assert security.enable_dns_rebinding_protection
-    assert all(host.startswith(("127.0.0.1", "localhost", "[::1]")) for host in security.allowed_hosts)
+    assert all(host.startswith(("127.0.0.1:", "localhost:", "[::1]:")) for host in security.allowed_hosts)
+    assert all(
+        origin.startswith(("http://127.0.0.1:", "http://localhost:", "http://[::1]:"))
+        for origin in security.allowed_origins
+    )
+
+
+INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-03-26",
+        "capabilities": {},
+        "clientInfo": {"name": "a-test", "version": "1"},
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        pytest.param({}, 200, id="this machine, no Origin"),
+        pytest.param({"Host": "catalogue.example.evil"}, 421, id="a foreign Host"),
+        pytest.param({"Origin": "https://catalogue.example.evil"}, 403, id="a foreign Origin"),
+        pytest.param(
+            {"Origin": "http://localhost.evil.example:8001"}, 403, id="an Origin that starts like ours"
+        ),
+    ],
+)
+async def test_a_request_from_elsewhere_is_refused_on_the_wire(headers: dict[str, str], status: int) -> None:
+    mcp = server()
+    app = mcp.streamable_http_app()
+    accept = {"Accept": "application/json, text/event-stream"}
+    async with mcp.session_manager.run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as http:
+            response = await http.post("/mcp", headers=accept | headers, json=INITIALIZE)
+    assert response.status_code == status
+
+
+def test_the_command_serves_what_the_settings_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(Settings.model_config, "env_file", None)  # the developer's `.env` stays out of it
+    log = tmp_path / "calls.jsonl"
+    for name, value in {
+        "EO_TOOL_LOG": str(log),
+        "EO_MCP_URL": "http://127.0.0.1:9001/mcp",
+        "EO_STAC_API_URL": "https://catalogue.example/v1",
+        "EO_STAC_TIMEOUT_S": "5",
+        "EO_STAC_MAX_RETRIES": "1",
+        "EO_STAC_DEADLINE_S": "7",
+    }.items():
+        monkeypatch.setenv(name, value)
+    catalogues: list[tuple[str, float, int]] = []
+    built: list[dict[str, Any]] = []
+    served: list[FastMCP] = []
+
+    def catalogue(url: str, *, timeout_s: float, max_retries: int) -> FakeCatalog:
+        catalogues.append((url, timeout_s, max_retries))
+        return FakeCatalog()
+
+    real_build = server_module.build_server
+
+    def build(*args: Any, **options: Any) -> FastMCP:  # noqa: ANN401 - build_server's own
+        built.append(options)
+        return real_build(*args, **options)
+
+    def run(mcp: FastMCP, *, transport: str) -> None:
+        assert transport == "streamable-http"
+        served.append(mcp)
+
+    monkeypatch.setattr(server_module, "StacCatalog", catalogue)
+    monkeypatch.setattr(server_module, "build_server", build)
+    monkeypatch.setattr(FastMCP, "run", run)
+    server_module.main()
+    assert catalogues == [("https://catalogue.example/v1", 5.0, 1)]
+    assert built[0]["catalog_deadline_s"] == 7.0
+    (mcp,) = served
+    assert (mcp.settings.host, mcp.settings.port) == ("127.0.0.1", 9001)
+    assert log.is_file()  # the log was opened where the settings say
+
+
+def test_the_command_refuses_an_address_it_cannot_serve(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    monkeypatch.setenv("EO_MCP_URL", "http://catalogue.example:8001/mcp")
+    with pytest.raises(ValueError, match=re.escape("EO_MCP_URL must be http://127.0.0.1:<port>")):
+        server_module.main()
+
+
+@pytest.mark.parametrize("field", ["start_date", "end_date"])
+async def test_a_date_with_a_time_is_refused(field: str) -> None:
+    result = await call(server(), "search_scenes", {**ROME_JULY, field: "2025-07-15T10:00:00"})
+    assert result.isError
+    assert field in error_text(result)
 
 
 @pytest.mark.parametrize(

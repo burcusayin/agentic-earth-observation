@@ -2,6 +2,7 @@
 # Pre-commit check: block private files, strings from an optional local denylist, and co-author lines.
 #
 # Without arguments (pre-commit stage) it checks the staged files, the staged diff and the commit identity.
+# With nothing staged, as in CI, it checks every tracked file's name instead.
 # With a file argument (commit-msg stage) it checks the commit message in that file.
 #
 # The denylist lives in .local/denylist.txt, which is gitignored: one string per line, matched as plain text
@@ -29,8 +30,13 @@ if [ $# -ge 1 ] && [ -f "$1" ]; then
 fi
 
 private_paths='(^|/)(\.env(\..+)?|\.envrc|CLAUDE\.local\.md)$|(^|/)(\.local|secrets)/|\.(key|pem)$'
-if git diff --cached --name-only --diff-filter=ACMR | grep -E -v '(^|/)\.env\.example$' | grep -E -q "$private_paths"; then
-  echo "private-strings: a private file is staged (.env*, .envrc, .local/, CLAUDE.local.md, *.key, *.pem, secrets/)." >&2
+if git diff --cached --quiet; then
+  candidates=$(git ls-files)
+else
+  candidates=$(git diff --cached --name-only --diff-filter=ACMR)
+fi
+if printf '%s\n' "$candidates" | grep -E -v '(^|/)\.env\.example$' | grep -E -q "$private_paths"; then
+  echo "private-strings: a private file is staged or tracked (.env*, .envrc, .local/, CLAUDE.local.md, *.key, *.pem, secrets/)." >&2
   exit 1
 fi
 

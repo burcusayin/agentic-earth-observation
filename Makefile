@@ -3,7 +3,7 @@ UV ?= uv
 
 INSPECTOR_VERSION := 2.12.0
 
-.PHONY: help setup lint format format-check typecheck test check hooks clean serve-mcp serve-agent inspector
+.PHONY: help setup lint format format-check typecheck test check hooks clean serve-mcp serve-agent inspector eval-smoke
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -37,6 +37,9 @@ serve-mcp: ## Run the catalogue MCP server on http://127.0.0.1:8001/mcp (Ctrl+C 
 
 serve-agent: ## Run the retrieval agent's A2A server on http://127.0.0.1:8002 (needs make serve-mcp and Ollama)
 	$(UV) run python -m agentic_earth_observation.retrieval_agent.a2a_server
+
+eval-smoke: ## One local run over the dev split: 4 tasks, free, about 10 requests to Earth Search (needs Ollama)
+	$(UV) run eo-agent eval --split dev --models qwen3.5:9b --runs 1
 
 inspector: ## Open the MCP Inspector on the running catalogue server (needs Node; start make serve-mcp first)
 	npx -y @modelcontextprotocol/inspector@$(INSPECTOR_VERSION) --server-url http://127.0.0.1:8001/mcp --transport http

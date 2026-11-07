@@ -29,7 +29,8 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
   - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `records.py` (what a run
     writes down: the run record and the attempt records), `outcome.py` (what a turn counts as: scored,
     infrastructure or errored), `servers.py` (the run's MCP server and retrieval agent as child processes),
-    `run_eval.py` (stub).
+    `model_server.py` (Ollama: which build runs, and that it alone is loaded), `run_eval.py` (the run loop,
+    `eo-agent eval`).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 
@@ -41,6 +42,7 @@ make check     # lint, format check, mypy --strict, tests with coverage; must pa
 make test      # tests only; for one test: uv run pytest tests/test_scoring.py::test_name
 make format    # ruff format
 make hooks     # every pre-commit hook on every file, including gitleaks and the private-strings check
+make eval-smoke  # one local run over the dev split: free, needs Ollama
 ```
 
 - **Dependencies:** `uv add '<pkg>>=X.Y,<NEXT_MAJOR>'`, or `uv add --group dev ...` for tools.

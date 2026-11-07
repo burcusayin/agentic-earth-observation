@@ -23,7 +23,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import Any
-from urllib.parse import urlsplit
 
 import uvicorn
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -52,7 +51,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, TRACE_ID_RULE
-from agentic_earth_observation.config import Settings
+from agentic_earth_observation.config import LOCAL_HOSTS, Settings, local_port
 from agentic_earth_observation.llm import build_chat_model
 from agentic_earth_observation.retrieval_agent.agent import run_retrieval
 from agentic_earth_observation.retrieval_agent.models import (
@@ -67,7 +66,6 @@ logger = logging.getLogger(__name__)
 
 JSON = A2A_MEDIA_TYPE
 RPC_PATH = "/a2a"
-LOCAL_HOSTS = ("127.0.0.1", "localhost")
 Retrieve = Callable[[RetrievalRequest, str, BaseChatModel, Settings], Awaitable[RetrievalResult]]
 
 
@@ -204,18 +202,10 @@ def build_app(executor: AgentExecutor, settings: Settings) -> Starlette:
     )
 
 
-def local_port(url: str) -> int:
-    """The port of EO_A2A_URL, which must be on this machine: the server binds to 127.0.0.1 only."""
-    parts = urlsplit(url)
-    if parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS or parts.port is None:
-        raise ValueError(f"EO_A2A_URL must be http://127.0.0.1:<port>, not {url!r}")
-    return parts.port
-
-
 def main() -> None:
     """Serve the retrieval agent over A2A on 127.0.0.1, at the port in EO_A2A_URL."""
     settings = Settings()
-    port = local_port(settings.a2a_url)
+    port = local_port(settings.a2a_url, "EO_A2A_URL")
     executor = RetrievalExecutor(build_chat_model(settings), settings)
     uvicorn.run(build_app(executor, settings), host="127.0.0.1", port=port)
 

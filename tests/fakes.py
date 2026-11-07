@@ -197,7 +197,14 @@ def _chunk(message: dict[str, Any], *, done: bool) -> dict[str, Any]:
         "done": done,
     }
     if done:
-        chunk |= {"done_reason": "stop", "prompt_eval_count": 100, "eval_count": 10}
+        chunk |= {
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 10,
+            "load_duration": 100_000_000,
+            "prompt_eval_duration": 200_000_000,
+            "eval_duration": 300_000_000,
+        }
     return chunk
 
 

@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import ollama
 import pytest
+from langgraph.checkpoint.serde import jsonplus
 
 from agentic_earth_observation.evals.golden import Route
 from agentic_earth_observation.orchestrator.client import RetrievalAgentError
@@ -80,6 +81,12 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture
+def langgraph_warns_again() -> None:
+    """LangGraph warns once per process about a class of ours in a checkpoint: start with none warned."""
+    jsonplus._warned_unregistered_types.clear()
+
+
 def orchestrator(
     decisions: list[OllamaStep], client: FakeClient, *, decision_deadline_s: float = 150.0
 ) -> tuple[Orchestrator, FakeOllama]:
@@ -138,6 +145,8 @@ class TestTurns:
         assert SCENE.id in out.answer
         assert (out.failure, out.infra_error, out.trace_id) == (None, None, "turn-1")
         usage = out.decision_usage
+        assert usage.model_seconds == pytest.approx(0.5)  # Ollama's own clock, as the fake reports it
+        assert usage.load_seconds == pytest.approx(0.1)
         assert (usage.model, usage.model_calls, usage.input_tokens, usage.output_tokens) == (
             MODEL_ID,
             1,
@@ -212,6 +221,17 @@ class TestTurns:
         assert first.failure == "parse_error"
         assert (second.failure, second.failure_detail, second.route) == (None, None, Route.DECLINE)
 
+    async def test_the_search_of_a_failed_turn_is_not_what_a_follow_up_continues(self) -> None:
+        # The user was told the turn failed, so "and the week after?" cannot be about its search.
+        failed = FOUND_MILAN.model_copy(update={"failure": "step_limit"})
+        client = FakeClient(failed, FOUND_NAPLES)
+        orch, _ = orchestrator([DELEGATE, DELEGATE], client)
+        out = await orch.run_turn("conv-1", "Milan, March 2025", "turn-1", TODAY)
+        assert out.failure == "step_limit"
+        await orch.run_turn("conv-1", "And the week after?", "turn-2", TODAY)
+        assert client.calls[1][0].previous_search is None
+
+    @pytest.mark.usefixtures("langgraph_warns_again")
     async def test_the_conversation_memory_holds_only_plain_values(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -470,6 +490,7 @@ class TestAnsweringAQuestion:
         await orch.run_turn("conv-b", "Sentinel-2 scenes of Milan, March 2025", "turn-2", TODAY)
         assert client.calls[0][0].clarifies is None
 
+    @pytest.mark.usefixtures("langgraph_warns_again")
     async def test_the_memory_stays_plain_with_a_question_in_it(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.config import ROOT
 from agentic_earth_observation.evals import golden
 from agentic_earth_observation.evals.golden import (
     GoldenError,
@@ -21,6 +22,7 @@ from agentic_earth_observation.evals.golden import (
     load_golden,
     load_tasks,
 )
+from agentic_earth_observation.evals.run_eval import FROZEN_EVALUATION_CODE, FROZEN_GOLDEN
 
 
 def task(**overrides: object) -> dict[str, Any]:
@@ -144,6 +146,17 @@ def test_dev_and_test_use_different_places() -> None:
     assert places("dev").isdisjoint(places("test"))
 
 
+def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
+    # A fix to any of them needs a dated decision and a new tag, and then new values here and in run_eval.py.
+    assert golden_hash() == FROZEN_GOLDEN
+    assert evaluation_code_hash() == FROZEN_EVALUATION_CODE
+    for path, frozen in (
+        ("docs/evaluation.md", "9f3ae9ba0643eebc8082a4b6dc549224fc5674a85af3fa8d75f18ca3f10abb5b"),
+        ("data/gazetteer.json", "af181e26cb48c0631f8e3e70bbe71aa7ef2e12d59b1bae0f1b141d76f842d91e"),
+    ):
+        assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == frozen, path
+
+
 def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:
     first = evaluation_code_hash()
     assert first == evaluation_code_hash()
@@ -152,7 +165,7 @@ def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:
 
 
 class TestGapsFoundInTheNovemberReview:
-    """Validation rules that the review of 2 Nov 2026 found untested. golden.py is frozen."""
+    """Validation rules that had no test when they were frozen."""
 
     @pytest.mark.parametrize(
         ("change", "reason"),

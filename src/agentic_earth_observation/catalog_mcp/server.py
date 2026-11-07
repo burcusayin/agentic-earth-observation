@@ -5,7 +5,7 @@ catalogue client, so it can be tested in-process and used by any MCP client. The
 parameter descriptions are what a model reads; they are part of what the evaluation measures, so change
 them deliberately.
 
-Run it with `make serve-mcp`; it listens on http://127.0.0.1:8001/mcp only.
+Run it with `make serve-mcp`; it listens on this machine only, by default at http://127.0.0.1:8001/mcp.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from agentic_earth_observation.catalog_mcp.tool_log import (
     error_kind,
     returned_ids,
 )
-from agentic_earth_observation.config import Settings
+from agentic_earth_observation.config import Settings, local_port
 from agentic_earth_observation.domain import MISSION_START, Product, SearchRequest
 
 logger = logging.getLogger(__name__)
@@ -249,7 +249,7 @@ class CatalogMCP(FastMCP):
         )
         try:
             self.tool_log.write(record)
-        except OSError:
+        except (OSError, ValueError):  # ValueError: arguments that JSON cannot hold, such as a lone surrogate
             logger.exception("could not write the tool-call log at %s", self.tool_log.path)
             return False
         return True
@@ -281,7 +281,8 @@ def tool_descriptions_hash(tools: Iterable[Tool]) -> str:
 async def _ask_catalogue[T](what: str, ask: Callable[[], T], deadline_s: float | None) -> T:
     """Run a blocking catalogue call in a worker thread and stop waiting after `deadline_s` seconds.
 
-    A late answer is dropped. The thread itself cannot be stopped; it ends when its HTTP timeouts do.
+    A late answer is dropped. The thread itself cannot be stopped; it ends when its HTTP timeouts do, and
+    those bound each read of the answer, not the whole answer.
     """
     try:
         async with asyncio.timeout(deadline_s):
@@ -296,6 +297,7 @@ def build_server(
     tool_log: ToolCallLog | None = None,
     *,
     catalog_deadline_s: float | None = None,
+    port: int = PORT,
 ) -> FastMCP:
     """The MCP server with its four tools, using the given catalogue and gazetteer; calls go to `tool_log`.
 
@@ -303,7 +305,7 @@ def build_server(
     always answers before the agent's MCP timeout.
     """
     mcp = CatalogMCP(
-        "eo-catalog", instructions=INSTRUCTIONS, host=HOST, port=PORT, stateless_http=True, json_response=True
+        "eo-catalog", instructions=INSTRUCTIONS, host=HOST, port=port, stateless_http=True, json_response=True
     )
     mcp.tool_log = tool_log
 
@@ -412,13 +414,17 @@ def build_server(
 
 
 def main() -> None:
-    """Serve the tools over streamable HTTP on 127.0.0.1:8001, with Earth Search and the gazetteer."""
+    """Serve the tools over streamable HTTP on 127.0.0.1, at the port in EO_MCP_URL, with the catalogue at
+    EO_STAC_API_URL and the gazetteer."""
     settings = Settings()
+    port = local_port(settings.mcp_url, "EO_MCP_URL")
     catalog = StacCatalog(
         settings.stac_api_url, timeout_s=settings.stac_timeout_s, max_retries=settings.stac_max_retries
     )
     log = ToolCallLog(settings.tool_log)
-    server = build_server(catalog, Gazetteer.load(), log, catalog_deadline_s=settings.stac_deadline_s)
+    server = build_server(
+        catalog, Gazetteer.load(), log, catalog_deadline_s=settings.stac_deadline_s, port=port
+    )
     server.run(transport="streamable-http")
 
 

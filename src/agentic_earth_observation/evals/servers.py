@@ -3,20 +3,20 @@
     async with RunServers(settings, folder) as servers:
         servers.tool_descriptions       # for the run record
         servers.check()                 # before every attempt, and before the run is called complete
-        await servers.restart_agent()   # after a turn that ran past the harness timeout
+        await servers.restart_agent()   # after an attempt lost to the infrastructure, or a bug
 
 Every run gets its own pair (decision of 2026-11-05): the retrieval agent's model and the file of the
 tool-call log are fixed when the servers start. Both are child processes of the runner, started from this
 checkout, with the run's settings stated in their environment and their output in the run's folder.
 
-What running the real servers showed, and the rule that follows from each (decision of 2026-11-06):
+What running the real servers showed, and the rule that follows from each (decisions of 2026-11-06 and -07):
 - a new server looks ready while an older one answers on its port, and exits a moment later. So nothing may
   answer on a port before a server is started there, and a server is ready only while its process runs;
 - a server that has died looks like a failure of the infrastructure to every turn after it. So `check` tells
   the runner, which ends the run instead of trying each remaining task three times;
 - the retrieval agent goes on with a turn its client gave up on, and does not stop on SIGTERM while a turn is
   in flight. So a stop waits a few seconds and then kills, and `restart_agent` gives the next attempt a new
-  agent.
+  agent after any attempt that was not scored.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from datetime import timedelta
 from pathlib import Path
 from types import TracebackType
 from typing import Self
-from urllib.parse import urlsplit
 
 import httpx
 from a2a.client import A2ACardResolver
@@ -45,10 +44,11 @@ from pydantic import SecretStr
 
 from agentic_earth_observation.catalog_mcp import server as catalog_server
 from agentic_earth_observation.catalog_mcp.server import tool_descriptions_hash
-from agentic_earth_observation.config import ENV_PREFIX, ROOT, Settings
+from agentic_earth_observation.config import ENV_PREFIX, ROOT, Settings, is_local_url, local_port
 from agentic_earth_observation.evals.records import TOOL_LOG_FILE
 from agentic_earth_observation.failures import describe, leaves
 from agentic_earth_observation.retrieval_agent import a2a_server
+from agentic_earth_observation.retrieval_agent.agent import local_mcp_client
 
 MCP = "MCP server"
 AGENT = "retrieval agent"
@@ -56,8 +56,9 @@ MCP_LOG = "mcp_server.log"
 AGENT_LOG = "retrieval_agent.log"
 MCP_COMMAND = (sys.executable, "-m", catalog_server.__name__)
 AGENT_COMMAND = (sys.executable, "-m", a2a_server.__name__)
-# Both servers were ready within a second when measured; the first start after a reboot is slower.
-READY_LIMIT_S = 30.0
+# Both servers were ready within a second when measured. The limit is for the first start after a reboot, or a
+# machine short of memory, where failing would cost the rest of a long evaluation.
+READY_LIMIT_S = 60.0
 # An idle server stops in a fraction of a second. The agent with a turn in flight does not stop at all.
 STOP_GRACE_S = 5.0
 CHECK_TIMEOUT_S = 5.0  # one readiness check
@@ -90,7 +91,7 @@ async def served_tools(settings: Settings, *, http: McpHttpClientFactory | None 
         "timeout": CHECK_TIMEOUT_S,
         "sse_read_timeout": CHECK_TIMEOUT_S,
         "session_kwargs": {"read_timeout_seconds": timedelta(seconds=CHECK_TIMEOUT_S)},
-        "httpx_client_factory": http,
+        "httpx_client_factory": http or (local_mcp_client if is_local_url(settings.mcp_url) else None),
     }
     async with create_session(connection) as session:
         await session.initialize()
@@ -102,7 +103,8 @@ async def agent_answers(settings: Settings, *, http: httpx.AsyncClient | None = 
 
     Raises if there is no valid card. `http` lets tests reach an in-process server; it is closed afterwards.
     """
-    async with http or httpx.AsyncClient(timeout=CHECK_TIMEOUT_S) as client:
+    local = is_local_url(settings.a2a_url)
+    async with http or httpx.AsyncClient(timeout=CHECK_TIMEOUT_S, trust_env=not local) as client:
         await A2ACardResolver(client, settings.a2a_url).get_agent_card()
 
 
@@ -303,6 +305,9 @@ class RunServers:
                 try:
                     answer = await check()
                 except Exception as err:
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():  # anyio can turn a Ctrl+C into another error
+                        raise
                     problem = f"its last check failed with {describe(leaves(err)[0])}"
                 else:
                     break
@@ -322,19 +327,8 @@ class RunServers:
 
 def _local_ports(settings: Settings) -> tuple[int, int]:
     """The ports of the MCP server and of the retrieval agent, which a run can start on this machine only."""
-    host, port = catalog_server.HOST, catalog_server.PORT
     try:
-        mcp = urlsplit(settings.mcp_url)
-        ours = mcp.scheme == "http" and mcp.hostname in a2a_server.LOCAL_HOSTS and mcp.port == port
-    except ValueError:  # a port that is not a number
-        ours = False
-    if not ours:
-        raise ServerError(
-            f"EO_MCP_URL must be http://{host}:{port}/mcp for an evaluation run, not {settings.mcp_url!r}: "
-            "the run starts the MCP server itself, and it listens there only"
-        )
-    try:
-        return port, a2a_server.local_port(settings.a2a_url)
+        return local_port(settings.mcp_url, "EO_MCP_URL"), local_port(settings.a2a_url, "EO_A2A_URL")
     except ValueError as err:
         raise ServerError(str(err)) from err
 
