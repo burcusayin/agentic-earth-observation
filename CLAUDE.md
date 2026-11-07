@@ -28,7 +28,8 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
     output), `prompts.py`, `replies.py` (the reply templates) and `client.py` (the A2A client).
   - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `records.py` (what a run
     writes down: the run record and the attempt records), `outcome.py` (what a turn counts as: scored,
-    infrastructure or errored), `run_eval.py` (stub).
+    infrastructure or errored), `servers.py` (the run's MCP server and retrieval agent as child processes),
+    `run_eval.py` (stub).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 

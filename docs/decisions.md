@@ -229,7 +229,8 @@ decision is made or reversed; do not rewrite old entries.
   - Anything else is raised as it is: an HTTP error (a refused request, a missing card), a JSON-RPC error, an
     answer that is not JSON, or an answer that breaks the contract (not one JSON result).
   - The request never asks for streaming, so there is always one answer to read, and each call is bounded by
-    the HTTP timeout: the SDK swallows cancellation, so asyncio.timeout would not bound it.
+    the HTTP timeout: the SDK swallows cancellation, so asyncio.timeout would not bound it. (Corrected on
+    2026-11-06: that holds only with the agent in the client's own process.)
 - **How the orchestrator handles a turn** (`orchestrator/`). Checked against langgraph 1.2.14 and
   langchain-ollama 1.1 by running them.
   - **The model decides with a `Decision` tool call** (route and reason; a pairing that contradicts itself is
@@ -407,3 +408,37 @@ decision is made or reversed; do not rewrite old entries.
 - **Tool calls recorded under none of the run's trace ids change no attempt.** They cannot be tied to a task,
   so excluding or failing a task for them would be a guess. The runner counts them in the run record, and the
   report marks such a run.
+- **The run's servers** (`evals/servers.py`), from what two prototypes showed on the real servers started as
+  child processes (no model, no catalogue search):
+  - **Nothing may answer on a server's port before the run starts it.** With an older server on the port, a
+    new one looks ready within 0.01 s, because the older one answers, and exits a moment later. So the runner
+    refuses to start while either port answers, and a server counts as ready only while its process runs.
+    The runner checks that both still run before every attempt and before it calls a run complete.
+  - **The servers run with the runner's settings:** every setting with a value is stated in their environment,
+    where it beats `.env`. The API key is never copied out of the settings: the servers read it where the
+    runner did.
+  - **Ready means:** the MCP server answers `initialize` and `list_tools` (the run record's tool hash is made
+    from this answer), and the retrieval agent's card can be read, each as the agents themselves do it.
+  - **A stop is SIGTERM, 5 s, then SIGKILL,** the agent first. An idle server stops within a second; the
+    retrieval agent with a turn in flight does not stop on SIGTERM at all (uvicorn waits for the turn).
+  - **A server found dead ends the run as `aborted`,** with the server and how it ended as the reason, rather
+    than restarting it and going on. To a turn, a dead server is an infrastructure failure, so without this
+    every remaining task would be tried three times and excluded, and the run would end complete with almost
+    nothing scored. A crashed server is a bug in our own system, as the third errored task is; the rest of one
+    run of 18 tasks costs little to repeat, while a task scored after a crash of unknown cause can move the
+    result by 5.6 points. The paid runs are the one place where this costs money: to be looked at again
+    before Part 4.
+  - The reason kept in the run record names the server's log file in the run's folder, never a path of this
+    machine.
+- **The harness timeout** (to be built into the runner): a turn runs as a task, and the runner waits for it
+  with `asyncio.wait(timeout=EO_HARNESS_TIMEOUT_S)`, which returns on time whatever the task does; never with
+  `asyncio.timeout` or `wait_for`, which return late when a call swallows cancellation (6 s under a 1 s limit
+  in the prototype). On a timeout the attempt is `infrastructure` ("the turn ran past the harness timeout"),
+  and the retrieval agent is restarted before the next attempt: it goes on with the abandoned turn (the A2A
+  SDK continues a disconnected client's task in the background) and holds the model meanwhile. A new agent is
+  ready in under a second.
+- **Correction of 2026-11-03, "the SDK swallows cancellation":** that holds only when the agent runs in the
+  client's own process, as in the unit tests, where a cancelled call ends as a cancelled task and so as
+  `RetrievalAgentError`. Over a real connection the client's call is cancelled as any other: `asyncio.timeout(2)`
+  raised at 2.0 s, and the client stayed usable. The docstring of `orchestrator/client.py` says so now. A call
+  is still bounded by the HTTP timeout; the harness timeout above is the second bound.

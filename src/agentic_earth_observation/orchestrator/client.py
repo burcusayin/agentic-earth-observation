@@ -12,8 +12,9 @@ each outcome comes back (decision of 2026-11-03):
   excluded from the scores as infrastructure;
 - anything else (an HTTP or protocol error, an answer that breaks the contract) is raised as it is.
 
-The SDK swallows cancellation while it waits for an answer, so a call is bounded by the HTTP timeout, never by
-asyncio.timeout.
+A call is bounded by the HTTP timeout (EO_A2A_TIMEOUT_S). Over a real connection it can also be cancelled.
+With the agent in the client's own process, as in the unit tests, the SDK turns a cancellation into a
+cancelled task, which is a RetrievalAgentError here (decision of 2026-11-06, correcting 2026-11-03).
 """
 
 from __future__ import annotations
