@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,25 @@ from agentic_earth_observation.catalog.stac import EARTH_SEARCH_URL
 
 ROOT = Path(__file__).resolve().parents[2]  # the repository: relative paths in settings start here
 ENV_PREFIX = "EO_"
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
+
+def is_local_url(url: str) -> bool:
+    """Whether a URL names this machine. A client of such a URL ignores proxy settings: a request to a local
+    server cannot get there through a proxy, and would hand the user's words to it."""
+    return urlsplit(url).hostname in LOCAL_HOSTS
+
+
+def local_port(url: str, variable: str) -> int:
+    """The port of a server's URL, which must be on this machine: our servers bind to 127.0.0.1 only."""
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:  # a port that is not a number
+        port = None
+    if parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS or port is None:
+        raise ValueError(f"{variable} must be http://127.0.0.1:<port>, not {url!r}")
+    return port
 
 
 class Settings(BaseSettings):

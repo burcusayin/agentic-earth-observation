@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.config import ROOT
 from agentic_earth_observation.evals import golden
 from agentic_earth_observation.evals.golden import (
     GoldenError,
@@ -20,6 +21,12 @@ from agentic_earth_observation.evals.golden import (
     golden_hash,
     load_golden,
     load_tasks,
+)
+from agentic_earth_observation.evals.run_eval import (
+    FROZEN_EVALUATION_CODE,
+    FROZEN_EVALUATION_RULES,
+    FROZEN_GAZETTEER,
+    FROZEN_TEST_SPLIT,
 )
 
 
@@ -144,6 +151,36 @@ def test_dev_and_test_use_different_places() -> None:
     assert places("dev").isdisjoint(places("test"))
 
 
+def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
+    # A fix to any of them needs a dated decision and a new tag, and then new values in run_eval.py. The
+    # literal digests here are the ones taken at the tag; the constants must stay equal to them. The dev split
+    # is not frozen, so the hash over both splits is pinned here only to show when it last changed.
+    assert golden_hash() == "743d5e2abb5db223099b2b6f37c73fbdc503b80c745d4a456e999003b5ed9bc7"
+    assert (
+        evaluation_code_hash()
+        == FROZEN_EVALUATION_CODE
+        == "72d140b004d9a42eaa017ea53db68334407cea46a82b5d4b871ff45d94c3b9cb"
+    )
+    for path, constant, frozen in (
+        (
+            "docs/evaluation.md",
+            FROZEN_EVALUATION_RULES,
+            "9f3ae9ba0643eebc8082a4b6dc549224fc5674a85af3fa8d75f18ca3f10abb5b",
+        ),
+        (
+            "data/gazetteer.json",
+            FROZEN_GAZETTEER,
+            "af181e26cb48c0631f8e3e70bbe71aa7ef2e12d59b1bae0f1b141d76f842d91e",
+        ),
+        (
+            "data/golden/test.jsonl",
+            FROZEN_TEST_SPLIT,
+            "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784",
+        ),
+    ):
+        assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == constant == frozen, path
+
+
 def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:
     first = evaluation_code_hash()
     assert first == evaluation_code_hash()
@@ -152,7 +189,7 @@ def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:
 
 
 class TestGapsFoundInTheNovemberReview:
-    """Validation rules that the review of 2 Nov 2026 found untested. golden.py is frozen."""
+    """Validation rules that had no test when they were frozen."""
 
     @pytest.mark.parametrize(
         ("change", "reason"),

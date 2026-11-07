@@ -1,4 +1,4 @@
-"""Build data/gazetteer.json from OpenStreetMap through Nominatim. Run rarely, and only after asking.
+"""Build data/gazetteer.json from OpenStreetMap through Nominatim. Run rarely: the file is frozen.
 
     uv run python scripts/build_gazetteer.py
 

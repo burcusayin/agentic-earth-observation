@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 from collections.abc import Callable, Iterator
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,17 @@ from pydantic import ValidationError
 
 from agentic_earth_observation import cli
 from agentic_earth_observation.config import Settings
+from agentic_earth_observation.evals.golden import GoldenError
+from agentic_earth_observation.evals.model_server import ModelServerError
+from agentic_earth_observation.evals.records import (
+    CodeVersion,
+    Hashes,
+    ModelBuild,
+    ProvenanceError,
+    RunRecord,
+)
+from agentic_earth_observation.evals.run_eval import MODELS_UNDER_EVALUATION, EvaluationError
+from agentic_earth_observation.evals.servers import ServerError
 from agentic_earth_observation.orchestrator.client import RetrievalAgentError
 from agentic_earth_observation.orchestrator.graph import Orchestrator
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalResult
@@ -201,6 +213,212 @@ def test_without_a_date_the_chat_takes_todays(monkeypatch: pytest.MonkeyPatch) -
     config = settings(reference_date=date(2025, 6, 1))
     cli.main(["chat"], settings=config)
     assert seen == [date(2025, 6, 1)]
+
+
+async def test_ctrl_c_at_the_prompt_ends_the_chat() -> None:
+    # `input` blocks the event loop, so without care the Ctrl+C would only take effect after the next line.
+    def interrupted(prompt: str) -> str:
+        signal.raise_signal(signal.SIGINT)
+        raise AssertionError("Ctrl+C did not interrupt the wait for a line")
+
+    client = FakeClient()
+    said: list[str] = []
+    await cli.chat(FakeOllama().model(), client, settings(), TODAY, ask=interrupted, say=said.append)
+    assert said[-1] == ""
+    assert client.calls == []
+
+
+def test_ctrl_c_at_the_prompt_leaves_the_handler_as_it_was() -> None:
+    def asyncios_own(signum: int, frame: object) -> None:
+        raise AssertionError("no Ctrl+C was sent")
+
+    before = signal.signal(signal.SIGINT, asyncios_own)
+    try:
+        assert cli._read_line(lambda prompt: "hello") == "hello"
+        assert signal.getsignal(signal.SIGINT) is asyncios_own
+    finally:
+        signal.signal(signal.SIGINT, before)
+
+
+def test_ctrl_c_during_a_turn_of_the_chat_ends_it_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def chat_with(config: Settings, today: date) -> None:
+        signal.raise_signal(signal.SIGINT)
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(cli, "_chat_with_the_running_servers", chat_with)
+    assert cli.main(["chat"], settings=settings()) == 130
+
+
+def run_record(status: str = "complete", reason: str | None = None) -> RunRecord:
+    return RunRecord(
+        run_id="20261107T093045Z-qwen3.5-9b-r1",
+        status=status,  # type: ignore[arg-type]  # the tests pass valid statuses as plain text
+        aborted_reason=reason,
+        split="dev",
+        run_index=1,
+        started_at=datetime(2026, 11, 7, 9, 30, 45, tzinfo=UTC),
+        finished_at=datetime(2026, 11, 7, 9, 40, 45, tzinfo=UTC),
+        code=CodeVersion(commit="0123456789abcdef0123456789abcdef01234567", dirty=False),
+        model=ModelBuild(provider="ollama", model="qwen3.5:9b", options={"seed": 42}),
+        hashes=Hashes(
+            retrieval_prompt="ab" * 32,
+            decide_prompt="ab" * 32,
+            tool_descriptions="ab" * 32,
+            golden="ab" * 32,
+            evaluation_code="ab" * 32,
+            gazetteer="ab" * 32,
+            evaluation_rules="ab" * 32,
+        ),
+        reference_date=TODAY,
+        shuffle_seed=1,
+        task_order=["dev-s2-milan-march"],
+        settings={"num_predict": 1024},
+        libraries={"python": "3.13"},
+        platform="test",
+    )
+
+
+class TestEval:
+    def evaluation(
+        self, monkeypatch: pytest.MonkeyPatch, outcome: list[RunRecord] | Exception
+    ) -> list[dict[str, Any]]:
+        """Replace the evaluation by one that records its options and ends with `outcome`."""
+        seen: list[dict[str, Any]] = []
+
+        async def evaluate(config: Settings, **options: Any) -> list[RunRecord]:  # noqa: ANN401 - its options
+            seen.append({"settings": config, **options})
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(cli, "evaluate", evaluate)
+        return seen
+
+    def test_the_options_reach_the_evaluation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = self.evaluation(monkeypatch, [run_record()])
+        config = settings()
+        argv = [
+            "eval",
+            "--split",
+            "dev",
+            "--models",
+            " qwen3.5:9b, ministral-3:8b ,",
+            "--runs",
+            "2",
+            "--for-report",
+            "--shuffle-seed",
+            "7",
+        ]
+        assert cli.main(argv, settings=config) == 0
+        assert seen == [
+            {
+                "settings": config,
+                "split": "dev",
+                "models": ["qwen3.5:9b", "ministral-3:8b"],
+                "runs": 2,
+                "for_report": True,
+                "shuffle_seed": 7,
+            }
+        ]
+
+    def test_the_defaults_are_every_model_three_runs_scratch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = self.evaluation(monkeypatch, [run_record()])
+        assert cli.main(["eval", "--split", "test"], settings=settings()) == 0
+        assert seen[0]["models"] == list(MODELS_UNDER_EVALUATION)
+        assert (seen[0]["runs"], seen[0]["for_report"], seen[0]["shuffle_seed"]) == (3, False, 1)
+
+    def test_each_run_is_reported_with_how_it_ended(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.evaluation(monkeypatch, [run_record()])
+        assert cli.main(["eval", "--split", "dev"], settings=settings()) == 0
+        assert capsys.readouterr().out == (
+            "20261107T093045Z-qwen3.5-9b-r1: complete (0 passed, 0 failed, 0 errored, 0 lost)\n"
+        )
+
+    def test_an_aborted_run_is_reported_and_the_command_fails(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.evaluation(monkeypatch, [run_record("aborted", "3 tasks errored")])
+        assert cli.main(["eval", "--split", "dev"], settings=settings()) == 1
+        assert capsys.readouterr().out == (
+            "20261107T093045Z-qwen3.5-9b-r1: aborted: 3 tasks errored "
+            "(0 passed, 0 failed, 0 errored, 0 lost)\n"
+        )
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            EvaluationError("not under evaluation: gpt-5"),
+            GoldenError("dev.jsonl:1: invalid"),
+            ProvenanceError("git is not installed"),
+            ServerError("something already answers on port 8001"),
+            ModelServerError("Ollama cannot be reached"),
+        ],
+    )
+    def test_what_stops_the_evaluation_is_said_without_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: Exception
+    ) -> None:
+        self.evaluation(monkeypatch, error)
+        assert cli.main(["eval", "--split", "dev"], settings=settings()) == 1
+        assert capsys.readouterr().err == f"error: {error}\n"
+
+    def test_a_bug_in_the_evaluation_is_not_hidden(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.evaluation(monkeypatch, RuntimeError("a bug"))
+        with pytest.raises(RuntimeError, match="a bug"):
+            cli.main(["eval", "--split", "dev"], settings=settings())
+
+    @pytest.mark.parametrize("stop", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+    def test_a_stop_signal_ends_the_evaluation_in_order(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stop: signal.Signals
+    ) -> None:
+        # The real signal, through the real asyncio.run: the evaluation is cancelled, so that it can write
+        # down how the run ended and stop the servers. Ctrl+C is asyncio's; a `kill` or closed terminal ours.
+        ended: list[str] = []
+
+        async def evaluate(config: Settings, **options: Any) -> list[RunRecord]:  # noqa: ANN401 - its options
+            signal.raise_signal(stop)
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                ended.append("cancelled")
+                raise
+            return []
+
+        monkeypatch.setattr(cli, "evaluate", evaluate)
+        assert cli.main(["eval", "--split", "dev"], settings=settings()) == 130
+        assert ended == ["cancelled"]
+        assert "kept in its folder" in capsys.readouterr().err
+
+    def test_a_signal_being_ignored_stays_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `nohup eo-agent eval ...`: closing the terminal must not end a run that takes all night.
+        async def evaluate(config: Settings, **options: Any) -> list[RunRecord]:  # noqa: ANN401 - its options
+            signal.raise_signal(signal.SIGHUP)
+            await asyncio.sleep(0.01)
+            return [run_record()]
+
+        monkeypatch.setattr(cli, "evaluate", evaluate)
+        previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            assert cli.main(["eval", "--split", "dev"], settings=settings()) == 0
+            assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+        finally:
+            signal.signal(signal.SIGHUP, previous)
+
+    @pytest.mark.parametrize(
+        "argv", [["eval"], ["eval", "--split", "train"], ["eval", "--split", "dev", "--runs", "many"]]
+    )
+    def test_a_command_line_it_cannot_read_is_refused(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exited:
+            cli.main(argv, settings=settings())
+        assert exited.value.code == 2
+        assert "usage: eo-agent eval" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("argv", [[], ["chat", "--today", "15/12/2025"], ["serve"]])

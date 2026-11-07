@@ -129,7 +129,8 @@ class SearchRequest(BaseModel):
         if self.dates.start < MISSION_START[self.product]:
             raise ValueError(
                 f"Start date {self.dates.start} is before the mission start date "
-                f"{MISSION_START[self.product]} for product {self.product}."
+                f"{MISSION_START[self.product]} for product {self.product}: "
+                f"start on {MISSION_START[self.product]} or later."
             )
         today = datetime.now(UTC).date()
         if self.dates.start > today:

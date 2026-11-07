@@ -22,7 +22,12 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog_mcp.server import build_server
 from agentic_earth_observation.catalog_mcp.tool_log import ToolCallLog
-from agentic_earth_observation.retrieval_agent.agent import AGENT_TOOLS, RetrievalState, build_graph
+from agentic_earth_observation.retrieval_agent.agent import (
+    AGENT_TOOLS,
+    MAX_TOOL_CALLS_PER_REPLY,
+    RetrievalState,
+    build_graph,
+)
 from tests.fakes import (
     MID_STREAM,
     SCENE,
@@ -152,6 +157,28 @@ async def test_two_calls_in_one_reply_both_run(tmp_path: Path) -> None:
     assert len(tool_messages(state)) == 2
     assert recorded_tools(log) == ["resolve_place", "resolve_place"]
     assert state["failure"] is None
+
+
+def reply_with_calls(count: int) -> AIMessage:
+    """A reply that asks for this many calls at once."""
+    calls = [tool_call("resolve_place", f"call-{i}", name="Milan").tool_calls[0] for i in range(count)]
+    return AIMessage("", tool_calls=calls)
+
+
+async def test_a_reply_asking_for_too_many_calls_at_once_runs_none_of_them(tmp_path: Path) -> None:
+    # They would all run together, and a search reaches a public service.
+    log = tmp_path / "calls.jsonl"
+    state, _ = await run([reply_with_calls(MAX_TOOL_CALLS_PER_REPLY + 1)], log)
+    assert state["failure"] == "step_limit"
+    assert tool_messages(state) == []
+    assert recorded_tools(log) == []
+
+
+async def test_a_reply_asking_for_the_most_calls_allowed_runs_them(tmp_path: Path) -> None:
+    log = tmp_path / "calls.jsonl"
+    state, _ = await run([reply_with_calls(MAX_TOOL_CALLS_PER_REPLY), AIMessage("Done.")], log)
+    assert state["failure"] is None
+    assert recorded_tools(log) == ["resolve_place"] * MAX_TOOL_CALLS_PER_REPLY
 
 
 async def test_running_out_of_steps_stops_before_another_tool_call(tmp_path: Path) -> None:

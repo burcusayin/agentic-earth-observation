@@ -28,7 +28,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.lowlevel.server import request_ctx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from agentic_earth_observation.catalog.stac import CatalogError
+from agentic_earth_observation.catalog.stac import CatalogError, CatalogRefused
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +92,11 @@ class ToolCallLog:
             log.write(line)
 
 
-def read_tool_calls(path: Path, trace_id: str) -> list[ToolCallRecord]:
-    """The calls recorded for one trace id, in the order the client sent them.
+def read_log(path: Path) -> list[ToolCallRecord]:
+    """Every call in the log, in the order the records were written (the order the calls finished).
 
-    Calls that run at the same time are written in the order they finish, so they are sorted by request id.
-    Request ids are numbered per MCP session, which is one turn: a trace id must not span two sessions.
+    A last line without its newline is a record still being written, or cut short by a crash: not yet a
+    record.
     """
     if not path.exists():
         raise FileNotFoundError(
@@ -104,16 +104,23 @@ def read_tool_calls(path: Path, trace_id: str) -> list[ToolCallRecord]:
         )
     records = []
     # Split on "\n" only: str.splitlines() also splits on U+2028 and the like, which JSON leaves unescaped.
-    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n")[:-1], start=1):
         if not line.strip():
             continue
         try:
-            record = ToolCallRecord.model_validate_json(line)
+            records.append(ToolCallRecord.model_validate_json(line))
         except ValidationError as err:
             raise ValueError(f"{path}:{number}: not a tool-call record: {err}") from err
-        if record.trace_id == trace_id:
-            records.append(record)
-    return sorted(records, key=_sent_order)
+    return records
+
+
+def read_tool_calls(path: Path, trace_id: str) -> list[ToolCallRecord]:
+    """The calls recorded for one trace id, in the order the client sent them.
+
+    Calls that run at the same time are written in the order they finish, so they are sorted by request id.
+    Request ids are numbered per MCP session, which is one turn: a trace id must not span two sessions.
+    """
+    return sorted((r for r in read_log(path) if r.trace_id == trace_id), key=_sent_order)
 
 
 def _sent_order(record: ToolCallRecord) -> tuple[int, int]:
@@ -156,6 +163,8 @@ def error_kind(err: BaseException) -> ErrorKind:
     while seen is not None:
         if isinstance(seen, asyncio.CancelledError):
             return "cancelled"
+        if isinstance(seen, CatalogRefused):
+            return "other"  # our request is wrong: a bug, which must not count as the catalogue's failure
         if isinstance(seen, CatalogError):
             return "catalogue"
         if isinstance(seen, UnknownToolError):

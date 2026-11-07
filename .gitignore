@@ -16,8 +16,12 @@ build/
 
 # Scratch evaluation runs (reported runs are committed under results/runs/)
 results/raw/
+# Server logs of a run: a traceback in them carries paths of this machine
+results/runs/**/*.log
+# Output of a run left going overnight (`nohup uv run eo-agent eval ...`)
+nohup.out
 
-# Private, never committed: local memory, keys, personal notes
+# Private, never committed: local notes and keys
 .local/
 CLAUDE.local.md
 .env

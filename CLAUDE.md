@@ -26,7 +26,11 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
     from the command line).
   - `orchestrator/`: `graph.py` (the LangGraph orchestrator and `run_turn`), `models.py` (decision and turn
     output), `prompts.py`, `replies.py` (the reply templates) and `client.py` (the A2A client).
-  - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `run_eval.py` (stub).
+  - `evals/`: `golden.py` (task format and validation), `scoring.py` (turn scoring), `records.py` (what a run
+    writes down: the run record and the attempt records), `outcome.py` (what a turn counts as: scored,
+    infrastructure or errored), `servers.py` (the run's MCP server and retrieval agent as child processes),
+    `model_server.py` (Ollama: which build runs, and that it alone is loaded), `run_eval.py` (the run loop,
+    `eo-agent eval`).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 
@@ -37,7 +41,9 @@ make setup     # .venv from uv.lock (uv-managed Python 3.13) and the pre-commit 
 make check     # lint, format check, mypy --strict, tests with coverage; must pass before a task is done
 make test      # tests only; for one test: uv run pytest tests/test_scoring.py::test_name
 make format    # ruff format
-make hooks     # every pre-commit hook on every file, including gitleaks and the private-strings check
+make hooks     # every pre-commit hook on every file; the private-files check, and gitleaks on staged changes
+make secrets   # gitleaks over the whole history, as CI runs it
+make eval-smoke  # one local run over the dev split: free, needs Ollama
 ```
 
 - **Dependencies:** `uv add '<pkg>>=X.Y,<NEXT_MAJOR>'`, or `uv add --group dev ...` for tools.

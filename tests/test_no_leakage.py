@@ -104,4 +104,5 @@ def test_no_test_split_content_in_system_code(source: Path) -> None:
         {term for term in any_case if _mentions(text, term, re.IGNORECASE)}
         | {term for term in as_written if _mentions(text, term)}
     )
-    assert not found, f"{source.relative_to(ROOT)} mentions test-split content: {found}"
+    # The count only: the output of a failed test must not show the test split to whoever reads it.
+    assert not found, f"{source.relative_to(ROOT)} mentions {len(found)} term(s) of the test split"

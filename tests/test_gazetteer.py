@@ -54,6 +54,12 @@ def test_an_absurdly_long_name_is_refused_without_work(gazetteer: Gazetteer) -> 
     assert gazetteer.suggest("x" * 10_000) == []
 
 
+def test_known_places_are_sorted_by_name(gazetteer: Gazetteer) -> None:
+    # The file lists them in another order; the tools show the user a sorted list.
+    names = gazetteer.known_places()
+    assert names == sorted(names)
+
+
 def test_normalise_ignores_case_accents_and_spaces() -> None:
     assert normalise("  Lago   di GÀRDA ") == "lago di garda"
 
@@ -113,3 +119,28 @@ def test_empty_input_and_a_zero_limit_give_no_suggestions(gazetteer: Gazetteer) 
     assert gazetteer.suggest("") == []
     assert gazetteer.suggest("   ") == []
     assert gazetteer.suggest("Trentto", limit=0) == []
+
+
+def test_suggestions_are_capped_at_the_limit_and_name_each_place_once(tmp_path: Path) -> None:
+    # Six names are close to the typo: five places and an alias of one of them, which is the closest of all.
+    springfields = {f"s{letter}": entry(f"Springfield {letter.upper()}", []) for letter in "abcd"}
+    springfields["se"] = entry("Springfield E", ["Springfeld E"])
+    gazetteer = Gazetteer.load(write_gazetteer(tmp_path / "g.json", springfields))
+    suggested = gazetteer.suggest("Springfeld")
+    assert len(suggested) == 3
+    assert len(set(suggested)) == 3, suggested  # the alias and the name of a place are one suggestion
+    assert set(suggested) <= {f"Springfield {letter}" for letter in "ABCDE"}
+    assert len(gazetteer.suggest("Springfeld", limit=1)) == 1
+
+
+def test_a_name_of_exactly_the_length_limit_is_looked_up_and_one_character_more_is_not(
+    tmp_path: Path,
+) -> None:
+    longest = "x" * 200
+    gazetteer = Gazetteer.load(write_gazetteer(tmp_path / "g.json", {"far": entry("Faraway", [longest])}))
+    place = gazetteer.resolve(longest)
+    assert place is not None
+    assert place.key == "far"
+    assert gazetteer.suggest(longest) == ["Faraway"]
+    assert gazetteer.resolve(longest + "x") is None
+    assert gazetteer.suggest(longest + "x") == []  # one character off the alias, but over the limit

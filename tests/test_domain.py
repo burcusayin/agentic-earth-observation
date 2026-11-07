@@ -168,9 +168,30 @@ class TestStrictness:
         with pytest.raises(ValidationError):
             make_request(max_cloud_cover="10")
 
+    @pytest.mark.parametrize("value", [True, "12.35"])
+    def test_a_box_takes_numbers_only(self, value: object) -> None:
+        with pytest.raises(ValidationError):
+            BBox.model_validate({**ROME, "west": value})
+
+    def test_a_start_before_the_mission_says_when_to_start(self) -> None:
+        with pytest.raises(ValidationError, match="start on 2015-06-23 or later"):
+            make_request(dates={"start": "2015-01-01", "end": "2015-12-31"})
+
     def test_accepts_integers_for_coordinates_and_cloud_cover(self) -> None:
         assert BBox(west=12, south=41, east=13, north=42).west == 12
         assert make_request(max_cloud_cover=10).max_cloud_cover == 10
+
+
+@pytest.fixture
+def today_is_2025_12_15(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The clock the validator reads stands at 23:30 UTC on 15 December 2025."""
+
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> FrozenClock:
+            return cls(2025, 12, 15, 23, 30, tzinfo=tz)
+
+    monkeypatch.setattr(domain, "datetime", FrozenClock)
 
 
 class TestBoundaries:
@@ -182,15 +203,19 @@ class TestBoundaries:
         dates = DateRange(start=date(2025, 7, 1), end=date(2025, 7, 31))
         assert dates.to_stac_interval().endswith("23:59:59.999999Z")
 
-    def test_start_today_is_accepted_and_tomorrow_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        class FrozenClock(datetime):
-            @classmethod
-            def now(cls, tz: tzinfo | None = None) -> FrozenClock:
-                return cls(2025, 12, 15, 23, 30, tzinfo=tz)
-
-        monkeypatch.setattr(domain, "datetime", FrozenClock)
+    @pytest.mark.usefixtures("today_is_2025_12_15")
+    def test_start_today_is_accepted_and_tomorrow_rejected(self) -> None:
         today = {"start": "2025-12-15", "end": "2025-12-15"}
         assert make_request(dates=today).dates.start == date(2025, 12, 15)
         tomorrow = {"start": "2025-12-16", "end": "2025-12-16"}
         with pytest.raises(ValidationError, match="today is 2025-12-15"):
             make_request(dates=tomorrow)
+
+    @pytest.mark.usefixtures("today_is_2025_12_15")
+    def test_only_a_start_in_the_future_is_refused_not_an_end(self) -> None:
+        # A range that runs from today into tomorrow asks for the scenes of today; one that starts tomorrow
+        # asks for scenes that cannot exist yet.
+        into_tomorrow = {"start": "2025-12-15", "end": "2025-12-16"}
+        assert make_request(dates=into_tomorrow).dates.end == date(2025, 12, 16)
+        from_tomorrow = {"start": "2025-12-16", "end": "2025-12-17"}
+        assert_rejected(lambda: make_request(dates=from_tomorrow), "future")

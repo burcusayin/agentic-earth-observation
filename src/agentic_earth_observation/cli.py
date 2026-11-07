@@ -4,23 +4,42 @@
     make serve-agent         # terminal 2: the retrieval agent over A2A (Ollama must be running)
     uv run eo-agent chat     # terminal 3: talk to the assistant
 
-Each line you type is one turn of the same conversation, so a follow-up continues the previous search. After
-each answer a status line shows how the turn was handled, with its trace id, which files the retrieval agent's
-tool calls in the MCP server's log. "quit", "exit" or Ctrl+D ends the chat.
+    uv run eo-agent eval --split dev --models qwen3.5:9b --runs 1   # the evaluation (starts its own servers)
+
+Each line you type in the chat is one turn of the same conversation, so a follow-up continues the previous
+search. After each answer a status line shows how the turn was handled, with its trace id, which files the
+retrieval agent's tool calls in the MCP server's log. "quit", "exit" or Ctrl+D ends the chat.
+
+The evaluation runs every task of a split through the system, each model the given number of times, and
+writes one folder per run under results/ (evals/run_eval.py). Ollama must be running; nothing else.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
+import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import date
+from typing import Any
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
 
 from agentic_earth_observation.config import Settings
+from agentic_earth_observation.evals.golden import SPLITS, GoldenError
+from agentic_earth_observation.evals.model_server import ModelServerError
+from agentic_earth_observation.evals.records import ProvenanceError, RunRecord
+from agentic_earth_observation.evals.run_eval import (
+    DEFAULT_RUNS,
+    DEFAULT_SHUFFLE_SEED,
+    MODELS_UNDER_EVALUATION,
+    EvaluationError,
+    evaluate,
+)
+from agentic_earth_observation.evals.servers import ServerError
 from agentic_earth_observation.llm import build_chat_model
 from agentic_earth_observation.orchestrator.client import (
     A2ARetrievalClient,
@@ -31,6 +50,8 @@ from agentic_earth_observation.orchestrator.graph import Orchestrator, TurnRefus
 from agentic_earth_observation.orchestrator.models import TurnOutput
 
 QUIT = {"quit", "exit"}
+INTERRUPTED = 130  # the exit code of a command stopped by Ctrl+C
+CANNOT_EVALUATE = (EvaluationError, GoldenError, ProvenanceError, ServerError, ModelServerError)
 
 
 def main(argv: Sequence[str] | None = None, *, settings: Settings | None = None) -> int:
@@ -43,11 +64,86 @@ def main(argv: Sequence[str] | None = None, *, settings: Settings | None = None)
     chat_parser.add_argument(
         "--today", type=date.fromisoformat, help="the date the agents take as today (YYYY-MM-DD)"
     )
+    eval_parser = commands.add_parser(
+        "eval", help="run the evaluation over a split of the golden set (starts the servers itself)"
+    )
+    eval_parser.add_argument("--split", choices=SPLITS, required=True, help="which split of the golden set")
+    eval_parser.add_argument(
+        "--models",
+        default=",".join(MODELS_UNDER_EVALUATION),
+        help=f"the models to run, separated by commas (default: {','.join(MODELS_UNDER_EVALUATION)})",
+    )
+    eval_parser.add_argument("--runs", type=int, default=DEFAULT_RUNS, help="runs per model (default: 3)")
+    eval_parser.add_argument(
+        "--for-report",
+        action="store_true",
+        help="write under results/runs for the report (needs a clean checkout) instead of results/raw",
+    )
+    eval_parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=DEFAULT_SHUFFLE_SEED,
+        help="the seed of the task order (default: 1)",
+    )
     args = parser.parse_args(argv)
     settings = settings or Settings()
+    if args.command == "eval":
+        return _evaluate(settings, args)
     today: date = args.today or settings.today()
-    asyncio.run(_chat_with_the_running_servers(settings, today))
+    try:
+        asyncio.run(_chat_with_the_running_servers(settings, today))
+    except KeyboardInterrupt:  # during a turn; at the prompt it simply ends the chat
+        return INTERRUPTED
     return 0
+
+
+def _evaluate(settings: Settings, args: argparse.Namespace) -> int:
+    """Run the evaluation and say how each run ended. 0 when every run completed."""
+    models = [model.strip() for model in args.models.split(",") if model.strip()]
+    try:
+        records = asyncio.run(
+            _until_stopped(
+                evaluate(
+                    settings,
+                    split=args.split,
+                    models=models,
+                    runs=args.runs,
+                    for_report=args.for_report,
+                    shuffle_seed=args.shuffle_seed,
+                )
+            )
+        )
+    except CANNOT_EVALUATE as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("interrupted: what each run finished is kept in its folder under results/", file=sys.stderr)
+        return INTERRUPTED
+    for record in records:
+        print(run_line(record))
+    return 0 if all(record.status == "complete" for record in records) else 1
+
+
+async def _until_stopped[T](main: Coroutine[Any, Any, T]) -> T:
+    """Run `main`, which SIGTERM and SIGHUP (a `kill`, a closed terminal) end as Ctrl+C does: asyncio handles
+    only Ctrl+C by itself, and otherwise the run's servers would stay behind and its record say `running`.
+
+    A signal being ignored stays ignored: that is what `nohup` asks for, for a run that takes all night.
+    """
+    task = asyncio.current_task()
+    assert task is not None  # noqa: S101 - this is a coroutine, so it runs in a task
+    loop = asyncio.get_running_loop()
+    for stop in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(stop) != signal.SIG_IGN:
+            loop.add_signal_handler(stop, task.cancel)
+    return await main
+
+
+def run_line(record: RunRecord) -> str:
+    ended = record.status if record.aborted_reason is None else f"aborted: {record.aborted_reason}"
+    tasks = record.tasks
+    counts = f"{tasks.passed} passed, {tasks.failed} failed, {tasks.errored} errored, {tasks.lost} lost"
+    return f"{record.run_id}: {ended} ({counts})"
 
 
 async def _chat_with_the_running_servers(settings: Settings, today: date) -> None:
@@ -74,8 +170,8 @@ async def chat(
     turn = 0
     while True:
         try:
-            text = ask("> ").strip()
-        except EOFError:
+            text = _read_line(ask).strip()
+        except (EOFError, KeyboardInterrupt):
             say("")
             return
         if text.lower() in QUIT:
@@ -95,6 +191,19 @@ async def chat(
             continue
         say(out.answer)
         say(f"  [{status_line(out)} · {time.perf_counter() - started:.1f} s]")
+
+
+def _read_line(ask: Callable[[str], str]) -> str:
+    """The next line, with Ctrl+C raising KeyboardInterrupt while waiting for it.
+
+    `input` blocks the event loop, so asyncio's own handler could only note the Ctrl+C, and the chat would
+    stay until the next line was typed and then end with a traceback.
+    """
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        return ask("> ")
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def status_line(out: TurnOutput) -> str:

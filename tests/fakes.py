@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -111,6 +111,21 @@ class ScriptedModel(GenericFakeChatModel):
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
+class BrokenModel(ScriptedModel):
+    """A model wrapper with a bug in it: every call raises `bug`."""
+
+    bug: Exception = ValueError("a bug in the model wrapper")
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,  # noqa: ANN401 - the signature of BaseChatModel._agenerate
+    ) -> ChatResult:
+        raise self.bug
+
+
 def tool_call(tool: str, call_id: str = "call-1", /, **args: object) -> AIMessage:
     """A model reply that calls one tool. Positional-only, so a tool argument may be called `name` too."""
     return AIMessage(
@@ -197,7 +212,14 @@ def _chunk(message: dict[str, Any], *, done: bool) -> dict[str, Any]:
         "done": done,
     }
     if done:
-        chunk |= {"done_reason": "stop", "prompt_eval_count": 100, "eval_count": 10}
+        chunk |= {
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 10,
+            "load_duration": 100_000_000,
+            "prompt_eval_duration": 200_000_000,
+            "eval_duration": 300_000_000,
+        }
     return chunk
 
 

@@ -227,7 +227,7 @@ class TestRulesAddedInReview:
 
 
 class TestGapsFoundInTheNovemberReview:
-    """Rules of docs/evaluation.md that the review of 2 Nov 2026 found untested; the scoring is frozen."""
+    """Rules of docs/evaluation.md that had no test when the scoring was frozen."""
 
     def test_an_asked_limit_must_match_exactly(self, gazetteer: Gazetteer) -> None:
         asked = SEARCH.model_copy(update={"limit": 5})

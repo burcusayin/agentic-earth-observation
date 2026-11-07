@@ -32,7 +32,7 @@ from pydantic import ValidationError
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_ID, TRACE_ID_RULE
 from agentic_earth_observation.evals.golden import Route
 from agentic_earth_observation.failures import describe, is_infrastructure
-from agentic_earth_observation.llm import unreadable_reply
+from agentic_earth_observation.llm import model_seconds, unreadable_reply
 from agentic_earth_observation.orchestrator.client import RetrievalClient
 from agentic_earth_observation.orchestrator.models import (
     Decision,
@@ -134,11 +134,14 @@ def build_graph(
             raise TypeError(f"expected a dict from the structured output, got {type(out).__name__}")
         raw = out["raw"]
         if isinstance(raw, AIMessage) and raw.usage_metadata is not None:
-            tokens = {
+            working, loading = model_seconds(raw.response_metadata)
+            spent_so_far = {
                 "input_tokens": raw.usage_metadata["input_tokens"],
                 "output_tokens": raw.usage_metadata["output_tokens"],
+                "model_seconds": working,
+                "load_seconds": loading,
             }
-            usage = usage.model_copy(update=tokens)
+            usage = usage.model_copy(update=spent_so_far)
         spent = usage.model_copy(update={"seconds": time.perf_counter() - started}).model_dump_json()
         decision = out["parsed"]
         if not isinstance(decision, Decision):
@@ -158,7 +161,9 @@ def build_graph(
             "failure_detail": result.failure_detail,
             "infra_error": result.infra_error,
         }
-        if result.search is not None:  # a successful search is the one a follow-up continues
+        # A successful search in a turn that did not fail is the one a follow-up continues: the user has not
+        # been shown the search of a failed turn.
+        if result.search is not None and result.failure is None:
             update["previous_search"] = result.search.model_dump_json()
         return update
 

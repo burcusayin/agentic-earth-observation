@@ -34,12 +34,18 @@ from agentic_earth_observation.catalog_mcp.server import build_server
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_HEADER, ToolCallLog, read_tool_calls
 from agentic_earth_observation.config import Settings
 from agentic_earth_observation.domain import SearchRequest
-from agentic_earth_observation.retrieval_agent.agent import AGENT_TOOLS, _infrastructure_error, run_retrieval
+from agentic_earth_observation.retrieval_agent.agent import (
+    AGENT_TOOLS,
+    _infrastructure_error,
+    local_mcp_client,
+    run_retrieval,
+)
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest, RetrievalResult
 from agentic_earth_observation.retrieval_agent.prompts import retrieval_system_prompt, retrieval_user_message
 from tests.fakes import (
     CONNECTION_REFUSED,
     SCENE,
+    BrokenModel,
     FakeCatalog,
     FakeOllama,
     OllamaError,
@@ -188,21 +194,6 @@ def raw_tools(log: Path) -> list[str]:
     return [json.loads(line)["tool"] for line in log.read_text(encoding="utf-8").splitlines()]
 
 
-class BrokenModel(ScriptedModel):
-    """A model wrapper with a bug in it: every call raises `bug`."""
-
-    bug: Exception = ValueError("a bug in the model wrapper")
-
-    async def _agenerate(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None = None,
-        run_manager: AsyncCallbackManagerForLLMRun | None = None,
-        **kwargs: Any,  # noqa: ANN401 - the signature of BaseChatModel._agenerate
-    ) -> ChatResult:
-        raise self.bug
-
-
 class HangingModel(ScriptedModel):
     """Gives its scripted replies, then never answers again."""
 
@@ -277,6 +268,9 @@ class TestTurns:
             300,
             30,
         )
+        # Ollama's own clock, summed over the three replies: the fake reports 0.1 s load, 0.5 s work each.
+        assert result.usage.model_seconds == pytest.approx(1.5)
+        assert result.usage.load_seconds == pytest.approx(0.3)
         offered = [sorted(t["function"]["name"] for t in sent["tools"]) for sent in server.requests]
         assert offered == [sorted(AGENT_TOOLS)] * 3
 
@@ -308,6 +302,17 @@ class TestTurns:
         async with mcp_server(tmp_path / "calls.jsonl") as client:
             await run_retrieval(REQUEST, "turn-9", model, config, http_client=client)
         assert client.built == [({TRACE_HEADER: "turn-9"}, httpx.Timeout(100, read=100))]
+
+    async def test_the_client_of_an_mcp_server_on_this_machine_ignores_proxy_settings(self) -> None:
+        # A request to a local server cannot get there through a proxy, and would hand the turn to it. The
+        # timeouts are the client's own when the session gives none, and the session's when it does.
+        async with local_mcp_client({TRACE_HEADER: "turn-9"}) as own_timeouts:
+            assert own_timeouts.trust_env is False
+            assert own_timeouts.headers[TRACE_HEADER] == "turn-9"
+            assert own_timeouts.timeout == httpx.Timeout(30.0, read=300.0)
+        async with local_mcp_client({TRACE_HEADER: "turn-9"}, httpx.Timeout(100, read=100)) as given:
+            assert given.trust_env is False
+            assert given.timeout == httpx.Timeout(100, read=100)
 
     async def test_calls_sent_together_are_read_back_in_the_models_order(self, tmp_path: Path) -> None:
         # The graph runs both calls of one reply at once; the search, asked first, is made to finish last.

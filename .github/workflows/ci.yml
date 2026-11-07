@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the secret scan reads the whole history
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -41,8 +42,12 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # The same checks as on every commit, including the gitleaks secret scan. mypy already ran in make check.
+      # The same checks as on every commit. mypy already ran in make check. Nothing is staged here, so the
+      # gitleaks hook finds nothing, and the private-strings hook only checks the names of the tracked files.
       - name: Commit checks on all files
         run: uv run pre-commit run --all-files --show-diff-on-failure
         env:
           SKIP: mypy
+
+      - name: Secret scan of the whole history
+        run: uv run pre-commit run --hook-stage manual gitleaks-history --all-files

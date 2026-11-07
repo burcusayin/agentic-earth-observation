@@ -20,7 +20,8 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
 | Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
 | Orchestrator (LangGraph), an A2A client, and `eo-agent chat` | `src/agentic_earth_observation/orchestrator/`, `src/agentic_earth_observation/cli.py` | Done |
-| Evaluation runner and results | `src/agentic_earth_observation/evals/run_eval.py` | Planned |
+| Evaluation runner, and `eo-agent eval` | `src/agentic_earth_observation/evals/run_eval.py` | Done on the dev split |
+| Results on the test split | `results/runs/` | Not run yet |
 
 ## Architecture
 
@@ -35,7 +36,7 @@ catalogue MCP server  -->  Earth Search STAC API (Sentinel-1 and Sentinel-2 scen
 ```
 
 The three parts run as separate processes, so each boundary is a real protocol boundary rather than a function
-call. Only scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0.1` only.
+call. The catalogue speaks STAC, the SpatioTemporal Asset Catalog API for satellite scene metadata. Only scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0.1` only.
 
 ## Evaluation
 
@@ -64,8 +65,20 @@ The details are in [docs/evaluation.md](docs/evaluation.md), and the design deci
 
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/) and make; the MCP Inspector also needs Node, and the agents need
-[Ollama](https://ollama.com) with the model in `EO_LLM_MODEL` pulled.
+Requires [uv](https://docs.astral.sh/uv/) 0.12.23 or newer and make. Run it from a clone: the code reads
+`data/` and writes `results/` in the repository, so it does not work as an installed package. Tested on macOS
+and, for the checks, on Ubuntu.
+
+The agents need [Ollama](https://ollama.com) (tested with 0.40.1) and a model. The two under evaluation take
+about 8 GB of memory while loaded, on top of what the machine is doing; with less to spare, turns get slow enough
+to time out.
+
+```bash
+ollama pull qwen3.5:9b       # 7.6 GB, the default in EO_LLM_MODEL
+ollama pull ministral-3:8b   # 6.0 GB, the other model under evaluation
+```
+
+The MCP Inspector also needs Node.
 
 ```bash
 make setup        # .venv from uv.lock (uv's own Python 3.13) and the git hooks
@@ -76,7 +89,12 @@ make serve-agent  # in a second terminal: the retrieval agent over A2A on http:/
 uv run eo-agent chat   # in a third terminal: talk to the assistant (both servers and Ollama running)
 uv run python -m agentic_earth_observation.retrieval_agent "<a question>"   # one question, through MCP
 uv run python -m agentic_earth_observation.evals.golden   # validate the golden set and print its hash
+make eval-smoke   # the evaluation on the dev split: starts its own servers; needs Ollama and Earth Search, ~2 min
 ```
+
+The dev split is for trying things: `uv run eo-agent eval --split dev --models qwen3.5:9b --runs 1` writes one
+folder per run under `results/raw/`, with its record, every attempt, the tool-call log and the server logs. The
+test split runs only with `--for-report`, from a clean checkout, because every run of it is reported.
 
 In the chat, each line continues the conversation: a follow-up such as "and the week after that?" continues
 the last search, and an answer to the assistant's own question (which place? which dates? did you mean …?)
@@ -87,7 +105,8 @@ Any MCP client can use the running server. For example, to add it to Claude Code
 
 `.env.example` lists every setting with its default. The MCP server reads the catalogue, timeout and tool-log
 settings; the retrieval agent reads the model and timeout settings as well; the chat reads the model, the
-retrieval agent's address and the A2A timeout. The Mistral provider is not wired up yet.
+retrieval agent's address and the A2A timeout. If port 8001 or 8002 is busy, `EO_MCP_URL` and `EO_A2A_URL` move
+the servers. The Mistral provider is not wired up yet.
 
 ## How this repository is developed
 
@@ -106,12 +125,19 @@ rules and safeguards are committed so they can be reviewed:
   - Pushing, opening pull requests, changing dependencies, re-recording HTTP fixtures and live tests need
     approval.
   - Reading `.env` and key files, force-pushing, skipping hooks and merging are refused.
+  - A hook formats every Python file Claude Code writes, with `ruff format`.
   - The deny rules match command patterns, so they are a safeguard, not a sandbox. The approval required for
     every push is the real control.
 - **Commit checks ([`.pre-commit-config.yaml`](.pre-commit-config.yaml)):** formatting, lint, types, secret
-  scanning (gitleaks) and a check for private files, on every commit and in CI.
-- **Independent reviews:** before the test set was frozen, separate review passes examined the code, the
-  evaluation and the repository. Their findings were fixed in dedicated commits.
+  scanning (gitleaks) and a check for private files, on every commit. CI runs them too, scans the whole history
+  with gitleaks, and checks the names of all tracked files; a list of private strings is checked on the
+  maintainer's machine only.
+- **Adversarial reviews:** before the test set was frozen, and again before the evaluation runner was finished,
+  separate read-only Claude Code sessions reviewed the code, the evaluation and the repository, without being
+  told the author's conclusions. Their findings were fixed, or recorded with a reason in
+  [`docs/decisions.md`](docs/decisions.md). No other person has reviewed this code yet.
+
+Bug reports and fixes are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
 
 ## Roadmap
 
@@ -119,11 +145,12 @@ rules and safeguards are committed so they can be reviewed:
 - [x] Catalogue MCP server, validated and tested against recorded catalogue responses.
 - [x] Golden set and scoring, frozen.
 - [x] Retrieval agent and orchestrator, connected over A2A.
-- [ ] Evaluation of two local models (Ollama) and two Mistral API models, three runs each, with latency and cost
-  per task.
+- [ ] Evaluation of two local models (Ollama), three runs each, with latency per task. The two Mistral API models
+  first planned here moved to the follow-up milestones (decision of 2026-11-05).
 
 **Follow-up milestones (planned):**
 - **Evaluation rigour:**
+  - Two Mistral API models next to the local ones, with cost per task.
   - A recorded local catalogue for fully offline runs.
   - Fault injection (timeouts, server errors, rate limits).
   - About 50 tasks.
@@ -139,7 +166,7 @@ rules and safeguards are committed so they can be reviewed:
 
 ## Licence and data
 
-The code is licensed under the [Apache License 2.0](LICENSE). The data needs credit, as set out in
+The code is licensed under the [Apache License 2.0](LICENSE). The data is not, and needs credit, as set out in
 [`NOTICE`](NOTICE):
 - **`data/gazetteer.json`** is derived from OpenStreetMap: © OpenStreetMap contributors, under the
   [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).

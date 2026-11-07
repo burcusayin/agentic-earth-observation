@@ -27,6 +27,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
+import httpx
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolCall, ToolMessage
@@ -43,9 +44,9 @@ from mcp.shared._httpx_utils import McpHttpClientFactory
 from agentic_earth_observation.catalog.stac import SceneSummary
 from agentic_earth_observation.catalog_mcp.server import PlaceResult, SearchResult
 from agentic_earth_observation.catalog_mcp.tool_log import TRACE_HEADER, TRACE_ID, TRACE_ID_RULE
-from agentic_earth_observation.config import Settings
+from agentic_earth_observation.config import Settings, is_local_url
 from agentic_earth_observation.failures import describe, is_infrastructure, leaves
-from agentic_earth_observation.llm import unreadable_reply
+from agentic_earth_observation.llm import model_seconds, unreadable_reply
 from agentic_earth_observation.retrieval_agent.models import (
     ModelFailure,
     PreviousSearch,
@@ -57,6 +58,9 @@ from agentic_earth_observation.retrieval_agent.prompts import retrieval_system_p
 
 AGENT_TOOLS = ("list_products", "resolve_place", "search_scenes")  # not get_scene: decision of 2026-10-31
 SAME_BOX = 0.001  # degrees: a box copied to 3 decimals is still the box a tool returned
+# Calls the model may ask for in one reply; they run at once, and a search reaches a public service. A turn
+# needs two or three; a reply over the limit fails the turn, as running out of steps does.
+MAX_TOOL_CALLS_PER_REPLY = 8
 
 
 class RetrievalState(MessagesState):
@@ -71,14 +75,11 @@ def build_graph(
     model: BaseChatModel, tools: Sequence[BaseTool], max_model_calls: int
 ) -> CompiledStateGraph[RetrievalState, None, RetrievalState, RetrievalState]:
     """The retrieval loop for one turn. The caller passes the system prompt and the request as messages."""
-    # Bind the tools to the model, so that it can call them.
     bound = model.bind_tools(tools)
     names = {t.name for t in tools}
 
-    # The model node: an async function of the state. It sends all the messages so far to the bound
-    #    model and returns an update with the reply and one more model call. If the model server could not
-    #    read the reply, that is the model's failure (decision of 2026-11-02): the turn ends with the
-    #    server's words kept. Any other error escapes the graph.
+    # A reply the model server could not read is the model's failure (decision of 2026-11-02): the turn ends
+    # with the server's words kept. Any other error escapes the graph.
     async def call_model(state: RetrievalState) -> dict[str, object]:
         try:
             reply = await bound.ainvoke(state["messages"])
@@ -92,12 +93,13 @@ def build_graph(
             }
         return {"messages": [reply], "model_calls": state["model_calls"] + 1}
 
-    # The route after the model: a plain function of the state that names the next node.
-    #    - END if the model node has already failed the turn (its reply could not be read);
-    #    - "malformed" if the reply has unparseable tool calls, or calls a tool not in `tools`;
-    #    - END if the reply calls no tool (it is the answer);
-    #    - "out_of_steps" if it calls tools but the model has already replied max_model_calls times;
-    #    - "tools" otherwise.
+    # After the model:
+    # - END if the model node has already failed the turn (its reply could not be read);
+    # - "malformed" if the reply has unparseable tool calls, or calls a tool not in `tools`;
+    # - END if the reply calls no tool (it is the answer);
+    # - "out_of_steps" if it calls tools but the model has already replied max_model_calls times, or asks for
+    #   more calls at once than a turn may send;
+    # - "tools" otherwise.
     def route(state: RetrievalState) -> str:
         if state["failure"] is not None:
             return END
@@ -108,21 +110,16 @@ def build_graph(
             return "malformed"
         if not reply.tool_calls:
             return END
-        if state["model_calls"] >= max_model_calls:
+        if state["model_calls"] >= max_model_calls or len(reply.tool_calls) > MAX_TOOL_CALLS_PER_REPLY:
             return "out_of_steps"
         return "tools"
 
-    # Two small nodes that only set `failure`: "malformed" sets "malformed_tool_call" and
-    #    "out_of_steps" sets "step_limit".
     def malformed(state: RetrievalState) -> dict[str, object]:
         return {"failure": "malformed_tool_call"}
 
     def out_of_steps(state: RetrievalState) -> dict[str, object]:
         return {"failure": "step_limit"}
 
-    # Wire and compile the graph: a StateGraph of RetrievalState with the four nodes ("model",
-    #    "tools" as a ToolNode, "malformed", "out_of_steps"), the edges START -> model, tools -> model,
-    #    malformed -> END and out_of_steps -> END, and the route as the conditional edge out of "model".
     graph = StateGraph(RetrievalState)
     graph.add_node("model", call_model)
     graph.add_node("tools", ToolNode(tools, handle_tool_errors=ToolException))
@@ -134,6 +131,17 @@ def build_graph(
     graph.add_edge("malformed", END)
     graph.add_edge("out_of_steps", END)
     return graph.compile()
+
+
+def local_mcp_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """The HTTP client of an MCP session with a server on this machine: it ignores proxy settings."""
+    return httpx.AsyncClient(
+        headers=headers, timeout=timeout or httpx.Timeout(30.0, read=300.0), auth=auth, trust_env=False
+    )
 
 
 async def run_retrieval(
@@ -191,7 +199,7 @@ async def _run_turn(
         "sse_read_timeout": settings.mcp_timeout_s,  # the wait for a tool's answer
         # And the wait for every MCP answer, so that one the client cannot read fails in time too.
         "session_kwargs": {"read_timeout_seconds": timedelta(seconds=settings.mcp_timeout_s)},
-        "httpx_client_factory": http_client,
+        "httpx_client_factory": http_client or (local_mcp_client if is_local_url(settings.mcp_url) else None),
     }
     async with create_session(connection) as session:
         await session.initialize()
@@ -237,6 +245,8 @@ class _UsageCounter(AsyncCallbackHandler):
         self.calls = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.model_seconds = 0.0
+        self.load_seconds = 0.0
 
     async def on_chat_model_start(
         self,
@@ -266,6 +276,10 @@ class _UsageCounter(AsyncCallbackHandler):
                 if isinstance(message, AIMessage) and message.usage_metadata is not None:
                     self.input_tokens += message.usage_metadata["input_tokens"]
                     self.output_tokens += message.usage_metadata["output_tokens"]
+                if isinstance(message, AIMessage):
+                    working, loading = model_seconds(message.response_metadata)
+                    self.model_seconds += working
+                    self.load_seconds += loading
 
     def usage(self, model_id: str, seconds: float) -> Usage:
         return Usage(
@@ -274,6 +288,8 @@ class _UsageCounter(AsyncCallbackHandler):
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
             seconds=seconds,
+            model_seconds=self.model_seconds,
+            load_seconds=self.load_seconds,
         )
 
 

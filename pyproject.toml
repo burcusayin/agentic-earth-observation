@@ -20,12 +20,17 @@ dependencies = [
     "ollama>=0.6.3,<1",
     "pydantic>=2.14,<3",
     "pydantic-settings>=2.15,<3",
+    "pystac>=1.14,<2",
     "pystac-client>=0.9.0,<0.10",
+    "requests>=2.32,<3",
+    "starlette>=1.0,<2",
+    "urllib3>=2.6,<3",
     "uvicorn>=0.54,<1",
 ]
 
 [project.urls]
 Repository = "https://github.com/burcusayin/agentic-earth-observation"
+Issues = "https://github.com/burcusayin/agentic-earth-observation/issues"
 
 [project.scripts]
 eo-agent = "agentic_earth_observation.cli:main"

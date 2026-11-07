@@ -17,13 +17,14 @@ from mcp.types import TextContent
 from pydantic import BaseModel, ValidationError
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
-from agentic_earth_observation.catalog.stac import CatalogError, SceneSummary
+from agentic_earth_observation.catalog.stac import CatalogError, CatalogRefused, SceneSummary
 from agentic_earth_observation.catalog_mcp.server import UNRECORDED, build_server
 from agentic_earth_observation.catalog_mcp.tool_log import (
     TRACE_HEADER,
     ToolCallLog,
     ToolCallRecord,
     error_kind,
+    read_log,
     read_tool_calls,
     returned_ids,
 )
@@ -53,7 +54,7 @@ def all_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def record(trace_id: str = "turn-1", request_id: int = 1, name: str = "Milan") -> ToolCallRecord:
+def record(trace_id: str | None = "turn-1", request_id: int = 1, name: str = "Milan") -> ToolCallRecord:
     """A successful resolve_place call, written straight to a log."""
     return ToolCallRecord(
         trace_id=trace_id, request_id=request_id, tool="resolve_place", arguments={"name": name}, ok=True
@@ -236,6 +237,40 @@ def test_reading_returns_a_trace_in_the_order_the_calls_were_sent(tmp_path: Path
     for request_id, trace in ((3, "turn-1"), (1, "turn-1"), (2, "turn-2"), (2, "turn-1")):
         log.write(record(trace, request_id))
     assert [r.request_id for r in read_tool_calls(path, "turn-1")] == [1, 2, 3]
+
+
+def test_a_last_line_still_being_written_is_not_a_record_yet(tmp_path: Path) -> None:
+    path = tmp_path / "calls.jsonl"
+    ToolCallLog(path).write(record())
+    with path.open("a", encoding="utf-8") as log:
+        log.write('{"trace_id": "turn-1", "req')
+    assert [r.trace_id for r in read_log(path)] == ["turn-1"]
+
+
+def test_a_catalogue_that_refuses_our_request_is_not_counted_as_a_failed_catalogue() -> None:
+    assert error_kind(CatalogError("the catalogue did not answer")) == "catalogue"
+    assert error_kind(CatalogRefused("the catalogue did not answer correctly (HTTP 400)")) == "other"
+
+
+async def test_arguments_that_json_cannot_hold_are_reported_and_do_not_escape(tmp_path: Path) -> None:
+    mcp = build_server(FakeCatalog(), Gazetteer.load(), ToolCallLog(tmp_path / "calls.jsonl"))
+    async with create_connected_server_and_client_session(mcp) as session:
+        result = await session.call_tool("resolve_place", {"name": "\ud800"})
+    assert result.isError
+    assert UNRECORDED in "".join(c.text for c in result.content if isinstance(c, TextContent))
+
+
+def test_reading_the_whole_log_gives_every_call_as_it_was_written(tmp_path: Path) -> None:
+    path = tmp_path / "calls.jsonl"
+    log = ToolCallLog(path)
+    for request_id, trace in ((3, "turn-1"), (1, None), (2, "turn-2"), (2, "turn-1")):
+        log.write(record(trace, request_id))
+    assert [(r.trace_id, r.request_id) for r in read_log(path)] == [
+        ("turn-1", 3),
+        (None, 1),
+        ("turn-2", 2),
+        ("turn-1", 2),
+    ]
 
 
 SEPARATED = "Mil\u2028an\u0085o\u2029"  # str.splitlines() would split on each of these

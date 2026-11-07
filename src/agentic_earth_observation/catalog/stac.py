@@ -3,6 +3,8 @@
 The catalogue is an external, untrusted source. Only whitelisted fields leave this module, every returned
 scene is re-checked against the request, and every failure becomes a CatalogError with a fixed, readable
 message (the catalogue's own error text is logged, never passed on, because it could carry instructions).
+Requests go to the configured catalogue only: pystac-client follows the links in a catalogue's answers, with
+the method, headers and body they name, so a link or a redirect to anywhere else is refused.
 pystac-client is synchronous; async callers should run these methods in a thread (asyncio.to_thread).
 """
 
@@ -11,6 +13,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +23,9 @@ from pystac_client import Client
 from pystac_client.errors import ClientTypeError
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
+from pystac_client.warnings import DoesNotConformTo
+from requests import Request
+from urllib3.util import parse_url
 from urllib3.util.retry import Retry
 
 from agentic_earth_observation.domain import BBox, Product, SearchRequest
@@ -61,16 +67,32 @@ class CatalogError(Exception):
     """The catalogue could not answer: network error, timeout or server error. The message is safe to show."""
 
 
+class CatalogRefused(CatalogError):
+    """The catalogue answered that our request is wrong (a 4xx): a bug or a wrong setting of ours, which must
+    not count as a failure of the catalogue. The message is safe to show."""
+
+
 class SceneSummary(BaseModel):
-    """The whitelisted fields of one scene. Nothing else from the catalogue reaches a model."""
+    """The whitelisted fields of one scene. Nothing else from the catalogue reaches a model.
+
+    The id, the one text a model and the answer repeat, has the shape of a Sentinel product id, so that it
+    cannot carry a sentence.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    id: str = Field(pattern=r"^[A-Za-z0-9_.-]+$", max_length=200)
+    id: str = Field(pattern=r"^S[12][A-Z]_[A-Z0-9_]+$", max_length=100)
     product: Product
     acquired: AwareDatetime  # a time without a time zone is ambiguous, so it is refused
-    cloud_cover: float | None = Field(default=None, ge=0, le=100)
+    cloud_cover: float | None = Field(default=None, ge=0, le=100, strict=True)  # true is not 1, "5" is not 5
     platform: str | None = Field(default=None, pattern=r"^[a-z0-9-]+$", max_length=40)
+
+    @field_validator("acquired", mode="before")
+    @classmethod
+    def _a_time_is_not_a_number(cls, value: object) -> object:
+        if isinstance(value, bool | int | float):
+            raise ValueError("a time is written as text")  # pydantic would read a number as a timestamp
+        return value
 
     @field_validator("acquired")
     @classmethod
@@ -97,6 +119,35 @@ def retry_policy(max_retries: int) -> Retry:
     )
 
 
+def _origin(url: str) -> tuple[str | None, str | None, int | None, str | None]:
+    """The scheme, host, port and user information of a URL, read by urllib3, which is what sends the request.
+
+    `urllib.parse` reads some URLs differently (a backslash before an `@`, for one), so a check made with it
+    could pass a URL that then goes elsewhere.
+    """
+    parts = parse_url(url)
+    port = parts.port or {"http": 80, "https": 443}.get(parts.scheme or "")
+    return parts.scheme, parts.host, port, parts.auth
+
+
+def only_to(url: str) -> Callable[[Request], None]:
+    """A check on every request pystac-client is about to send: it must go to the origin of `url`.
+
+    The answers of a catalogue name the next page and the search endpoint, with a method, headers and a body.
+    Followed blindly, a hostile answer could send a chosen request to the servers on this machine, which trust
+    local callers without an Origin header.
+    """
+    allowed = _origin(url)
+
+    def check(request: Request) -> None:
+        *origin, auth = _origin(str(request.url))
+        # A link may carry no user information, or the configured URL's own; never another.
+        if origin != list(allowed[:3]) or auth not in (None, allowed[3]):
+            raise ValueError(f"refused a link away from the configured catalogue: {request.url!s}")
+
+    return check
+
+
 class StacCatalog:
     """Searches one STAC API. Construction makes no network call; the connection opens on first use."""
 
@@ -106,6 +157,7 @@ class StacCatalog:
         self._io = StacApiIO(
             headers={"User-Agent": USER_AGENT}, timeout=timeout_s, max_retries=retry_policy(max_retries)
         )
+        self._io.session.max_redirects = 0  # a redirect could lead anywhere; Earth Search sends none
         self._client: Client | None = None
         self._lock = threading.Lock()  # tools call the catalogue from several threads
 
@@ -151,19 +203,42 @@ class StacCatalog:
     def _open(self) -> Client:
         with self._lock:
             if self._client is None:
-                # Pass the timeout again: Client.open resets the StacApiIO timeout to its own argument.
-                self._client = Client.open(self._url, stac_io=self._io, timeout=self._timeout_s)
+                # Pass both again: Client.open resets the timeout and the request check of the StacApiIO to
+                # its own arguments.
+                self._client = Client.open(
+                    self._url, stac_io=self._io, timeout=self._timeout_s, request_modifier=only_to(self._url)
+                )
             return self._client
 
     def _fetch(self, what: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         try:
-            items = list(self._open().search(fields=_FIELDS, **params).items_as_dicts())
+            client = self._open()
         except _CATALOGUE_FAILURES as err:
-            status = getattr(err, "status_code", None)
-            logger.warning("%s failed: %s: %.300s", what, type(err).__name__, err)
-            detail = f" (HTTP {status})" if status else ""
-            raise CatalogError(f"{what} failed: the catalogue did not answer correctly{detail}") from err
+            raise _failure(what, err) from err
+        # Outside the `try`s: this only checks our own parameters, so an error here is a bug of ours, which
+        # must not be taken for a failure of the catalogue. The one exception is a catalogue whose landing
+        # page no longer declares item search: that is the catalogue's doing.
+        try:
+            search = client.search(fields=_FIELDS, **params)
+        except DoesNotConformTo as err:
+            raise _failure(what, err) from err
+        try:
+            items = list(search.items_as_dicts())
+        except _CATALOGUE_FAILURES as err:
+            raise _failure(what, err) from err
         return [item for item in items if isinstance(item, dict)]
+
+
+def _failure(what: str, err: Exception) -> CatalogError:
+    """The error for a failed call: the catalogue's own text is logged, never passed on."""
+    status = getattr(err, "status_code", None)
+    logger.warning("%s failed: %s: %.300r", what, type(err).__name__, str(err))  # %r: one line in the log
+    detail = f" (HTTP {status})" if status else ""
+    message = f"{what} failed: the catalogue did not answer correctly{detail}"
+    # 408 and 429 are the catalogue's load, not our request; the retries have already been spent on them.
+    if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+        return CatalogRefused(message)
+    return CatalogError(message)
 
 
 def summarise(item: dict[str, Any], product: Product, collection: str) -> SceneSummary | None:
@@ -181,7 +256,7 @@ def summarise(item: dict[str, Any], product: Product, collection: str) -> SceneS
                 "platform": properties.get("platform"),
             }
         )
-    except ValidationError:
+    except (ValidationError, OverflowError):  # a time so far from UTC that it leaves the calendar
         return None
 
 
@@ -210,7 +285,7 @@ def footprint_boxes(raw: object) -> list[Box] | None:
         return None
     try:
         values = [float(v) for v in raw]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: an integer too large for a float
         return None
     west, south, east, north = values if len(values) == 4 else (values[0], values[1], values[3], values[4])
     if not all(math.isfinite(v) for v in (west, south, east, north)):

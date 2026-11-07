@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import ollama
 import pytest
+from langgraph.checkpoint.serde import jsonplus
 
 from agentic_earth_observation.evals.golden import Route
 from agentic_earth_observation.orchestrator.client import RetrievalAgentError
@@ -39,6 +40,7 @@ from tests.fakes import (
     MID_STREAM,
     NEVER_FINISHES,
     SCENE,
+    BrokenModel,
     FakeClient,
     FakeOllama,
     OllamaError,
@@ -78,6 +80,12 @@ ASKED = Clarification(request="Sentinel-2 scenes of Milan", asked="For which dat
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.fixture
+def langgraph_warns_again() -> None:
+    """LangGraph warns once per process about a class of ours in a checkpoint: start with none warned."""
+    jsonplus._warned_unregistered_types.clear()
 
 
 def orchestrator(
@@ -138,6 +146,8 @@ class TestTurns:
         assert SCENE.id in out.answer
         assert (out.failure, out.infra_error, out.trace_id) == (None, None, "turn-1")
         usage = out.decision_usage
+        assert usage.model_seconds == pytest.approx(0.5)  # Ollama's own clock, as the fake reports it
+        assert usage.load_seconds == pytest.approx(0.1)
         assert (usage.model, usage.model_calls, usage.input_tokens, usage.output_tokens) == (
             MODEL_ID,
             1,
@@ -212,6 +222,17 @@ class TestTurns:
         assert first.failure == "parse_error"
         assert (second.failure, second.failure_detail, second.route) == (None, None, Route.DECLINE)
 
+    async def test_the_search_of_a_failed_turn_is_not_what_a_follow_up_continues(self) -> None:
+        # The user was told the turn failed, so "and the week after?" cannot be about its search.
+        failed = FOUND_MILAN.model_copy(update={"failure": "step_limit"})
+        client = FakeClient(failed, FOUND_NAPLES)
+        orch, _ = orchestrator([DELEGATE, DELEGATE], client)
+        out = await orch.run_turn("conv-1", "Milan, March 2025", "turn-1", TODAY)
+        assert out.failure == "step_limit"
+        await orch.run_turn("conv-1", "And the week after?", "turn-2", TODAY)
+        assert client.calls[1][0].previous_search is None
+
+    @pytest.mark.usefixtures("langgraph_warns_again")
     async def test_the_conversation_memory_holds_only_plain_values(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -293,6 +314,16 @@ class TestDecisionFailures:
         assert 0.3 <= elapsed < 0.3 + 0.5  # enforced, and on time
         assert (out.decision_usage.model_calls, client.calls) == (1, [])
         assert 0.3 <= out.decision_usage.seconds <= elapsed
+
+    async def test_a_timeout_the_model_client_raises_before_the_deadline_is_reported_as_its_own(self) -> None:
+        # The deadline did not expire, so the error is the model client's: infrastructure, reported as what
+        # it was, never as the decision running past its deadline.
+        client = FakeClient()
+        model = BrokenModel(messages=iter([]), bug=TimeoutError("the model client gave up waiting"))
+        orch = Orchestrator(model, client, MODEL_ID, decision_deadline_s=150.0)
+        out = await orch.run_turn("conv-1", "Something", "turn-1", TODAY)
+        assert out.infra_error == "TimeoutError: the model client gave up waiting"
+        assert (out.failure, out.route, out.status, client.calls) == (None, Route.DECLINE, "declined", [])
 
     async def test_a_model_the_server_does_not_have_is_raised(self) -> None:
         orch, _ = orchestrator([OllamaError(404, 'model "qwen3.5:9b" not found')], FakeClient())
@@ -470,6 +501,7 @@ class TestAnsweringAQuestion:
         await orch.run_turn("conv-b", "Sentinel-2 scenes of Milan, March 2025", "turn-2", TODAY)
         assert client.calls[0][0].clarifies is None
 
+    @pytest.mark.usefixtures("langgraph_warns_again")
     async def test_the_memory_stays_plain_with_a_question_in_it(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

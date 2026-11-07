@@ -41,12 +41,11 @@ from starlette.applications import Starlette
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.catalog_mcp.server import build_server
 from agentic_earth_observation.catalog_mcp.tool_log import ToolCallLog, read_tool_calls
-from agentic_earth_observation.config import Settings
+from agentic_earth_observation.config import Settings, local_port
 from agentic_earth_observation.retrieval_agent import a2a_server
 from agentic_earth_observation.retrieval_agent.a2a_server import (
     RetrievalExecutor,
     build_app,
-    local_port,
 )
 from agentic_earth_observation.retrieval_agent.agent import run_retrieval
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalRequest, RetrievalResult
@@ -405,7 +404,7 @@ class TestGuards:
 
 @pytest.mark.parametrize(("url", "port"), [("http://127.0.0.1:8002", 8002), ("http://localhost:9100/", 9100)])
 def test_the_server_port_comes_from_a_local_url(url: str, port: int) -> None:
-    assert local_port(url) == port
+    assert local_port(url, "EO_A2A_URL") == port
 
 
 @pytest.mark.parametrize(
@@ -413,7 +412,7 @@ def test_the_server_port_comes_from_a_local_url(url: str, port: int) -> None:
 )
 def test_a_url_off_this_machine_is_refused(url: str) -> None:
     with pytest.raises(ValueError, match=re.escape("EO_A2A_URL must be http://127.0.0.1:<port>")):
-        local_port(url)
+        local_port(url, "EO_A2A_URL")
 
 
 @asynccontextmanager
@@ -463,15 +462,13 @@ async def test_a_turn_runs_from_a2a_through_mcp_under_the_trace_id_it_was_sent(t
     assert [c.tool for c in read_tool_calls(log, "a2a-turn-1")] == ["resolve_place", "search_scenes"]
 
 
-def test_the_server_binds_to_this_machine_at_the_configured_port(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_server_binds_to_this_machine_at_the_configured_port(monkeypatch: pytest.MonkeyPatch) -> None:
     served: list[tuple[object, str, int]] = []
 
     def run(app: object, *, host: str, port: int) -> None:
         served.append((app, host, port))
 
-    monkeypatch.chdir(tmp_path)  # Settings reads `.env` from the current folder: here there is none
+    monkeypatch.setitem(Settings.model_config, "env_file", None)  # the developer's `.env` stays out of it
     monkeypatch.setenv("EO_A2A_URL", "http://localhost:9100")
     monkeypatch.setattr(uvicorn, "run", run)
     a2a_server.main()
