@@ -616,3 +616,12 @@ below. Where the frozen text leaves a choice open, these are the choices:
   task) at the run's context; its seconds go into the run record. This first planned a warm-up alone, which the
   measurements showed would have fixed nothing. The scores did not depend on it: every task had the same result
   in every run of the rehearsal, cached or not.
+- **Each run's time is in the report, and the machine is a limitation of the timings.** The rehearsal from the
+  merged code (both models, 3 runs each) had no cached run any more: ministral-3:8b took 37.6, 36.7 and 38.9
+  model seconds, qwen3.5:9b 70.8, 77.2 and 85.8, about 10% more in each consecutive run, with the same work in
+  every run. The machine is a MacBook Air (Apple M5, 16 GB, no fan), running on battery, and a fanless laptop
+  slows itself under minutes of full load; macOS recorded no thermal warning, which it does only when severe, so
+  this is the likely cause, not a proven one. An earlier rehearsal with 13.7 GB of swap in use had one run take
+  twice as long. So the report now shows the seconds in turns and the model seconds of every run, over its scored
+  tasks, next to the medians, and the write-up states that the timings come from a fanless laptop. Scores are not
+  affected: every task had the same result in every run.

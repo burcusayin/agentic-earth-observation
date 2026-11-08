@@ -39,6 +39,7 @@ from agentic_earth_observation.evals.report import (
     Rate,
     Report,
     ReportError,
+    RunSeconds,
     build_report,
     collect_runs,
     mark_comparable,
@@ -52,7 +53,7 @@ from agentic_earth_observation.evals.run_eval import (
 )
 from agentic_earth_observation.evals.scoring import ArgumentScore, TurnScore
 from agentic_earth_observation.orchestrator.models import TurnOutput
-from agentic_earth_observation.retrieval_agent.models import ModelFailure
+from agentic_earth_observation.retrieval_agent.models import ModelFailure, Usage
 from tests.fakes import SCENE
 from tests.test_eval_records import ALL_RIGHT, PASSED, STARTED, git, run_record, turn
 
@@ -1357,3 +1358,77 @@ class TestEveryState:
         )
         assert "| r1 | other setup | its task order's seed differs from that of r2 |" in text
         assert "Made from 1 run that counts, of 2 listed" in text
+
+
+def timed_turn(seconds: float, decision_model_s: float, retrieval_model_s: float) -> TurnRecord:
+    """A passed turn whose output says how long the model took in the decision and in the retrieval."""
+    base = turn()
+    assert base.output is not None
+    assert base.output.retrieval is not None
+    output = base.output.model_copy(
+        update={
+            "decision_usage": Usage(model_seconds=decision_model_s),
+            "retrieval": base.output.retrieval.model_copy(
+                update={"usage": Usage(model_seconds=retrieval_model_s)}
+            ),
+        }
+    )
+    return turn(seconds=seconds, output=output)
+
+
+class TestTimePerRun:
+    """Each run's time over its scored attempts, so that a drift from run to run can be read (2026-11-08)."""
+
+    def tasks(self) -> list[Task]:
+        return [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+
+    def test_each_runs_seconds_are_those_of_its_scored_attempts(self, tmp_path: Path) -> None:
+        # r1: three scored tasks of 10, 20 and 30 s, the model taking 1 + 8, 2 + 16 and 3 + 24 s of them.
+        # r2: dev-a lost to the infrastructure (its attempts left out), dev-b and dev-c of 5 and 7 s.
+        write_attempts(
+            tmp_path,
+            "r1",
+            [
+                ended("r1", "dev-a", 1, "scored", True, timed_turn(10, 1, 8)),
+                ended("r1", "dev-b", 1, "scored", True, timed_turn(20, 2, 16)),
+                ended("r1", "dev-c", 1, "scored", True, timed_turn(30, 3, 24)),
+            ],
+        )
+        write_attempts(
+            tmp_path,
+            "r2",
+            [
+                *(attempt("r2", "dev-a", n, *INFRA) for n in (1, 2, 3)),
+                ended("r2", "dev-b", 1, "scored", True, timed_turn(5, 1, 3)),
+                ended("r2", "dev-c", 1, "scored", True, timed_turn(7, 1, 5)),
+            ],
+            tasks=TaskCounts(passed=2, lost=1),
+        )
+        (summary,) = build_report(
+            "dev", collect_runs(tmp_path, "dev", ONE_TURN, golden=GOLDEN), self.tasks()
+        ).models
+        assert summary.run_seconds == [
+            RunSeconds(tasks=3, seconds=60.0, model_seconds=54.0),
+            RunSeconds(tasks=2, seconds=12.0, model_seconds=10.0),
+        ]
+        text = render_markdown(
+            build_report("dev", collect_runs(tmp_path, "dev", ONE_TURN, golden=GOLDEN), self.tasks())
+        )
+        assert "| Seconds in turns per run, over its scored tasks | 60.0 (3 tasks), 12.0 (2 tasks) |" in text
+        assert "| Model seconds per run, over its scored tasks | 54.0, 10.0 |" in text
+
+    def test_a_run_with_nothing_scored_says_so(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", {task: [INFRA, INFRA, INFRA] for task in TASKS}, tasks=TaskCounts(lost=3))
+        (summary,) = build_report(
+            "dev", collect_runs(tmp_path, "dev", ONE_TURN, golden=GOLDEN), self.tasks()
+        ).models
+        assert summary.run_seconds == [RunSeconds(tasks=0, seconds=0.0, model_seconds=0.0)]
+        text = render_markdown(
+            build_report("dev", collect_runs(tmp_path, "dev", ONE_TURN, golden=GOLDEN), self.tasks())
+        )
+        assert "| Seconds in turns per run, over its scored tasks | 0.0 (0 tasks) |" in text
+
+    def test_a_turn_that_raised_used_no_model_time_on_record(self) -> None:
+        raised = turn(output=None, error="RetrievalAgentError: failed", score=None, oracle=None, calls=[])
+        assert report._usages(raised) == []
+        assert report._usages(timed_turn(5, 1, 3)) == [Usage(model_seconds=1), Usage(model_seconds=3)]
