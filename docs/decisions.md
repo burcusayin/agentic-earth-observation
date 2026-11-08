@@ -648,3 +648,10 @@ findings are folded in below. Where the frozen text leaves a choice open, these 
   - Left as they are, with the reason: the pre-commit hooks are pinned by tag, not by commit (the actions in CI
     are pinned by commit); `langchain-mistralai` stays a dependency for the Mistral runs of a follow-up milestone;
     the `Read(./.env.*)` deny rule also keeps `.env.example` from Claude Code, the safer side of that choice.
+- **Four locked packages updated for security advisories,** raised by Dependabot on `uv.lock` after the release:
+  certifi 2026.7.22 to 2026.10.23 (it bundled root certificates with compromised intermediate keys; it serves every
+  HTTPS connection), pyasn1 0.6.4 to 0.6.5 (denial of service in decoding; reached only through `a2a-sdk`'s Google
+  auth libraries, which this project never calls), filelock 4.0.12 to 4.2.9 (through `langchain-mistralai` and the
+  development tools) and virtualenv 21.14.6 to 21.15.6 (development tools only). Each is at or above its fixed
+  version, and nothing else in the lock moved. The test runs were made with the old versions, which their records
+  name; no result depends on these packages, and Earth Search answers over HTTPS with the new certificate bundle.
