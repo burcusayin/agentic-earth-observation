@@ -174,6 +174,8 @@ class RunRecord(BaseModel):
     reference_date: date  # "today" for the agents
     shuffle_seed: int  # orders the tasks; the model's own seed is in model.options
     task_order: list[str] = Field(min_length=1)  # the task ids, in the order they ran
+    # The warm-up call after the model's fresh load (model_server.py); None in records made before it existed.
+    warm_up_seconds: float | None = Field(default=None, ge=0)
     # Calls in the run's tool log under none of the run's trace ids: they change no attempt, and the report
     # marks a run that has any (decision of 2026-11-06). A call that a turn past the harness timeout logs
     # after its attempt was read is under a known trace id, so it is in neither the attempt nor this count.

@@ -781,3 +781,10 @@ def test_a_bad_attempt_line_names_its_number(tmp_path: Path) -> None:
     with pytest.raises(RecordError) as raised:
         read_attempts(tmp_path)
     assert raised.value.line == 2
+
+
+def test_the_warm_up_time_is_optional_and_never_negative() -> None:
+    assert run_record().warm_up_seconds is None  # records made before the warm-up still read
+    assert run_record(warm_up_seconds=1.5).warm_up_seconds == 1.5
+    with pytest.raises(ValidationError, match="warm_up_seconds"):
+        run_record(warm_up_seconds=-0.1)

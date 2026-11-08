@@ -577,8 +577,8 @@ below. Where the frozen text leaves a choice open, these are the choices:
   the other split. A reason never quotes a record's text, which could hold a task or an answer.
 - **One setup:** the latest counted run sets it; an earlier run whose code (commits may differ only in
   `results/`), prompts, tool descriptions, settings, model options, task order's seed, reference date or Ollama
-  version differ, or that ran another build of the same model, is listed as "other setup" with what differs, and
-  not counted. After a fix, both sets of runs are then listed, as 2026-11-05 asks, instead of the report refusing.
+  version differ, that ran another build of the same model, or one checkout of which had uncommitted changes and
+  the other not, is listed as "other setup" with what differs, and not counted. After a fix, both sets of runs are then listed, as 2026-11-05 asks, instead of the report refusing.
   `--allow-dirty` counts dirty runs for scratch use, and the report then says it is not for publication.
 - **A task's result in a run** is its last attempt's: passed, failed, errored (a bug of ours: counted as failed,
   and listed apart, by the run's column) or lost (every attempt fell to the infrastructure).
@@ -603,3 +603,16 @@ below. Where the frozen text leaves a choice open, these are the choices:
   design only when no answer cited a scene no tool returned.
 - **Not changed, with the reason:** with the two local models there is one comparison, not the six among four
   models the frozen rules foresee; the report states how many it makes.
+- **Every run loads its model afresh, then warms it up** (`evals/model_server.py`; found by a dress rehearsal of
+  both models, 3 runs each, on the dev split). qwen3.5:9b's first run took 75 to 76 model seconds, its second and
+  third 35 to 40, with the same prompt tokens and a load under a second. The cause, measured against Ollama
+  0.40.1 directly: it answers a prompt it has seen from a cache (prompt evaluation in 0.04 s instead of 6 to 10 s)
+  while still reporting every prompt token; it keeps at least four whole prompts; for qwen3.5:9b only an exact
+  repeat is cached, so a run's own prompts gain nothing from each other; and an unload with a fresh load empties
+  the cache. At temperature 0 a run repeats the prompts of the run before, so the runs after the first measured
+  the cache, not the model. The runs were not slowed by a cold start: qwen3.5:9b's first call after a load costs
+  no more than any other, and ministral-3:8b's about 1.3 s more. So `prepare` now unloads the model too, and a
+  run then makes one warm-up call on unrelated text (it names nothing of the golden set, so its cache serves no
+  task) at the run's context; its seconds go into the run record. This first planned a warm-up alone, which the
+  measurements showed would have fixed nothing. The scores did not depend on it: every task had the same result
+  in every run of the rehearsal, cached or not.

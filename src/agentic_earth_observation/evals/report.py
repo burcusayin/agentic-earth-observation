@@ -300,6 +300,10 @@ def _setup_differs(
         return f"it ran on another Ollama version than {latest_folder}"
     if same_model.record is not None and record.model.digest != same_model.record.model.digest:
         return f"it ran another build of {record.model.model} than {same_model.folder}"
+    if record.code.dirty != latest.code.dirty:  # uncommitted changes cannot be shown to match anything
+        if record.code.dirty:
+            return f"it ran from a checkout with uncommitted changes, {latest_folder} from a clean one"
+        return f"it ran from a clean checkout, {latest_folder} from one with uncommitted changes"
     if record.code.commit != latest.code.commit:
         if not _has_commit(root, latest.code.commit):  # the setup cannot be known: report from another clone
             raise ReportError(
@@ -452,6 +456,7 @@ class ModelSummary(BaseModel):
     server_versions: list[str]
     runs: list[str]
     run_counts: list[TaskCounts]
+    warm_up_seconds: list[float | None]  # each run's warm-up after its fresh load; None before it existed
     tasks: int
     with_result: int  # tasks with a result in at least one run
     lost_excluded: Interval | None  # passed tasks, lost runs left out; None when no task has a result
@@ -542,6 +547,7 @@ def _model_summary(
         server_versions=sorted({record.model.server_version or "unknown" for record in records}),
         runs=[run.folder for run in runs],
         run_counts=[record.tasks for record in records],
+        warm_up_seconds=[record.warm_up_seconds for record in records],
         tasks=len(tasks),
         with_result=len(with_result),
         lost_excluded=bootstrap_interval(with_result, _passed_left_out) if with_result else None,
@@ -704,6 +710,7 @@ STATE_WORDS: dict[RunState, str] = {
     "dirty": "dirty checkout",
     "other_golden_set": "other golden set",
     "inconsistent": "inconsistent",
+    "other_setup": "other setup",
     "reported": "counted",
 }
 RESULT_WORDS: dict[Result, str] = {
@@ -849,6 +856,8 @@ def _model_section(summary: ModelSummary) -> list[str]:
         f"| Attempts lost to the infrastructure (retried) | {summary.infrastructure_attempts} |",
         f"| Tasks lost in every attempt | {summary.lost} |",
         f"| Tool calls under no trace id of the run | {summary.unattributed_calls} |",
+        "| Warm-up after each run's fresh load of the model, seconds | "
+        f"{_warm_ups(summary.warm_up_seconds)} |",
     ]
     if summary.cost is not None:
         cost = summary.cost
@@ -905,6 +914,10 @@ def _notes(report: Report) -> list[str]:
         "- Rules and limitations: `docs/evaluation.md` and `docs/decisions.md`.",
         "",
     ]
+
+
+def _warm_ups(seconds: Sequence[float | None]) -> str:
+    return ", ".join("not done" if value is None else f"{value:.1f}" for value in seconds)
 
 
 def _p(value: float) -> str:

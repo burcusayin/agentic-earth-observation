@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -381,7 +381,7 @@ def reported(run_id: str, commit: str, **changes: Any) -> ListedRun:  # noqa: AN
     return ListedRun(
         folder=run_id,
         state="reported",
-        record=record(run_id, code=CodeVersion(commit=commit, dirty=False), **changes),
+        record=record(run_id, **({"code": CodeVersion(commit=commit, dirty=False)} | changes)),
         results=dict.fromkeys(TASKS, "passed"),
     )
 
@@ -451,6 +451,21 @@ class TestComparableSetup:
         latest = reported("r2", commit, model=model_build("qwen3.5:9b"))
         earlier = reported("r1", commit, **({"model": model_build("qwen3.5:9b")} | changes))
         assert marked([earlier, latest], repo) == [("r1", "other_setup", said), ("r2", "reported", None)]
+
+    @pytest.mark.parametrize(
+        ("earlier_dirty", "said"),
+        [
+            (False, "it ran from a clean checkout, r2 from one with uncommitted changes"),
+            (True, "it ran from a checkout with uncommitted changes, r2 from a clean one"),
+        ],
+    )
+    def test_a_run_from_a_checkout_with_changes_and_one_without_are_two_setups(
+        self, repo: Path, earlier_dirty: bool, said: str
+    ) -> None:
+        commit = self.head(repo)
+        earlier = reported("r1", commit, code=CodeVersion(commit=commit, dirty=earlier_dirty))
+        latest = reported("r2", commit, code=CodeVersion(commit=commit, dirty=not earlier_dirty))
+        assert marked([earlier, latest], repo)[0] == ("r1", "other_setup", said)
 
     def test_another_build_of_the_same_model_is_another_setup_but_another_model_is_not(
         self, repo: Path
@@ -1314,3 +1329,31 @@ class TestPValues:
     )
     def test_small_values_are_never_shown_as_zero(self, value: float, shown: str) -> None:
         assert report._p(value) == shown
+
+
+class TestWarmUp:
+    def test_each_runs_warm_up_is_shown_and_a_run_without_one_says_so(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS)  # a record made before the warm-up existed
+        write_run(tmp_path, "r2", ALL_PASS, warm_up_seconds=2.04)
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        found = build_report("dev", collect_runs(tmp_path, "dev", ONE_TURN, golden=GOLDEN), tasks)
+        assert found.models[0].warm_up_seconds == [None, 2.04]
+        assert (
+            "| Warm-up after each run's fresh load of the model, seconds | not done, 2.0 |"
+            in render_markdown(found)
+        )
+
+
+class TestEveryState:
+    def test_every_state_a_run_can_be_in_has_its_words(self) -> None:
+        assert set(report.STATE_WORDS) == set(get_args(report.RunState))
+
+    def test_a_report_with_a_run_on_another_setup_renders(self, tmp_path: Path) -> None:
+        write_run(tmp_path, "r1", ALL_PASS, shuffle_seed=7)
+        write_run(tmp_path, "r2", ALL_PASS)
+        tasks = [search_task(task_id, Category.SINGLE_SEARCH) for task_id in TASKS]
+        text = render_markdown(
+            build_report("dev", collect_runs(tmp_path, "dev", ONE_TURN, golden=GOLDEN), tasks)
+        )
+        assert "| r1 | other setup | its task order's seed differs from that of r2 |" in text
+        assert "Made from 1 run that counts, of 2 listed" in text
