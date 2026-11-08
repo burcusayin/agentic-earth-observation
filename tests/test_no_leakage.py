@@ -20,6 +20,7 @@ import pytest
 
 from agentic_earth_observation.catalog.gazetteer import Gazetteer
 from agentic_earth_observation.evals.golden import Task, load_golden
+from agentic_earth_observation.evals.model_server import WARM_UP_TEXT
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "agentic_earth_observation"
@@ -106,3 +107,13 @@ def test_no_test_split_content_in_system_code(source: Path) -> None:
     )
     # The count only: the output of a failed test must not show the test split to whoever reads it.
     assert not found, f"{source.relative_to(ROOT)} mentions {len(found)} term(s) of the test split"
+
+
+def test_no_test_split_content_in_the_warm_up_text() -> None:
+    # The warm-up text is sent to the model under evaluation, but it lives in evals/, which the scan of system
+    # code leaves out (see system_sources): it gets the same check here.
+    any_case, as_written = _test_split_terms()
+    found = {term for term in any_case if _mentions(WARM_UP_TEXT, term, re.IGNORECASE)} | {
+        term for term in as_written if _mentions(WARM_UP_TEXT, term)
+    }
+    assert not found, f"the warm-up text mentions {len(found)} term(s) of the test split"

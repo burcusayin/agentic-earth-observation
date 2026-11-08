@@ -95,6 +95,8 @@ make report    # the report on the test split's runs, written to results/summary
   - A fix needs a dated decision and a new tag.
 - **No leakage:** never use the test split's places, dates or wording in prompts, tool descriptions or few-shot
   examples. Tune on the dev split only.
+- **Prompts are frozen for v1.0:** test-split results were seen on 2026-11-08, so prompts and tool descriptions
+  stay as they are until v1.0 is tagged. A change after it is measured again, on new runs, and reported as such.
 - **The models under evaluation are fixed.** Add or swap one only after a dated entry in `docs/decisions.md`.
 - **Local models (Ollama):** always set `num_ctx`, `temperature` and `seed` explicitly; the default context
   truncates silently. The values are in `docs/decisions.md`.
