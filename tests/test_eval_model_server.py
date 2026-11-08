@@ -303,7 +303,8 @@ async def test_the_warm_up_is_one_short_call_on_unrelated_text_at_the_run_contex
 
 
 def test_the_warm_up_text_names_nothing_of_the_golden_set() -> None:
-    # It is cached by Ollama: no task may find its own words there. The leakage test covers this module too.
+    # It is cached by Ollama: no task may find its own words there. tests/test_no_leakage.py checks it against
+    # the test split, since its scan of system code leaves evals/ out.
     words = set(model_server.WARM_UP_TEXT.lower().replace(",", " ").replace(".", " ").split())
     assert not words & {"sentinel", "scene", "scenes", "satellite", "cloud", "radar", "image", "images"}
     assert 200 < len(model_server.WARM_UP_TEXT) < 4000

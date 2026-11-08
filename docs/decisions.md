@@ -625,3 +625,10 @@ below. Where the frozen text leaves a choice open, these are the choices:
   twice as long. So the report now shows the seconds in turns and the model seconds of every run, over its scored
   tasks, next to the medians, and the write-up states that the timings come from a fanless laptop. Scores are not
   affected: every task had the same result in every run.
+- **The test split was run for the report, and the prompts are frozen for v1.0.** Both local models, 3 runs each,
+  on 2026-11-08 from 11:26 to 11:51 UTC, with `eo-agent eval --split test --for-report` from clean commit
+  `e596132`: all six runs complete, no attempt retried or errored, no unattributed call. The machine was on
+  battery with other applications open, the maintainer's choice at the start; the timings are read with that in
+  mind (above). The records and the report were committed as they were written. Since test-split results have
+  now been seen, the prompts and tool descriptions stay as they are for v1.0 (`CLAUDE.md`); the results and
+  their analysis are in `docs/results.md`.

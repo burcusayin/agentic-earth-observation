@@ -20,9 +20,9 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
 | Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
 | Orchestrator (LangGraph), an A2A client, and `eo-agent chat` | `src/agentic_earth_observation/orchestrator/`, `src/agentic_earth_observation/cli.py` | Done |
-| Evaluation runner, and `eo-agent eval` | `src/agentic_earth_observation/evals/run_eval.py` | Done on the dev split |
-| The report, and `eo-agent report` | `src/agentic_earth_observation/evals/report.py`, `stats.py` | Done; checked on the dev split |
-| Results on the test split | `results/runs/`, `results/summary.md` | Not run yet |
+| Evaluation runner, and `eo-agent eval` | `src/agentic_earth_observation/evals/run_eval.py` | Done |
+| The report, and `eo-agent report` | `src/agentic_earth_observation/evals/report.py`, `stats.py` | Done |
+| Results on the test split: two local models, 3 runs each | [`docs/results.md`](docs/results.md), `results/` | Done (2026-11-08) |
 
 ## Architecture
 
@@ -59,8 +59,24 @@ The golden set has 22 tasks: 4 for development and 18 for testing.
   - grounding (every cited scene id came from a tool);
   - the final status.
 
-  Results will be reported as counts with confidence intervals, and differences that a small test set cannot
-  support will not be claimed.
+  Results are reported as counts with confidence intervals, and differences that a small test set cannot
+  support are not claimed.
+
+### Results
+
+Both local models, three runs each over the 18 test tasks (2026-11-08, from a clean checkout):
+
+| | qwen3.5:9b | ministral-3:8b |
+|---|---|---|
+| Passed tasks (95% interval) | 17 of 18 (15 to 18) | 15 of 18 (12 to 18) |
+| Same result in all 3 runs | every task | every task |
+| Answers citing a scene no tool returned | 0 | 0 |
+| Seconds per task, median | 16.3 | 10.4 |
+
+The models differ on 4 tasks (3 passed by qwen3.5:9b only, 1 by ministral-3:8b only; exact sign test p = 0.62):
+with 18 tasks, the difference does not show that either is better. The task-by-task analysis and the limitations,
+among them timings taken on a fanless laptop, are in [docs/results.md](docs/results.md); the full report is
+[results/summary.md](results/summary.md), and every run's records are in `results/runs/`.
 
 The details are in [docs/evaluation.md](docs/evaluation.md), and the design decisions with their reasons in
 [docs/decisions.md](docs/decisions.md).
@@ -152,8 +168,9 @@ Bug reports and fixes are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md) and 
 - [x] Catalogue MCP server, validated and tested against recorded catalogue responses.
 - [x] Golden set and scoring, frozen.
 - [x] Retrieval agent and orchestrator, connected over A2A.
-- [ ] Evaluation of two local models (Ollama), three runs each, with latency per task. The two Mistral API models
-  first planned here moved to the follow-up milestones (decision of 2026-11-05).
+- [x] Evaluation of two local models (Ollama), three runs each, with latency per task: see
+  [docs/results.md](docs/results.md). The two Mistral API models first planned here moved to the follow-up
+  milestones (decision of 2026-11-05).
 
 **Follow-up milestones (planned):**
 - **Evaluation rigour:**
