@@ -14,6 +14,7 @@ import shutil
 import subprocess
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Literal, Self
 
@@ -949,8 +950,13 @@ def _warm_ups(seconds: Sequence[float | None]) -> str:
 
 
 def _p(value: float) -> str:
-    """A p-value with two significant digits, never rounded to 0."""
-    return "<0.001" if value < 0.001 else f"{value:.2g}"
+    """A p-value with two significant digits, never rounded to 0, and a tie rounded up (0.625 is 0.63):
+    Python's own formatting rounds an exact tie to the even digit, which is not how a p-value is read."""
+    if value < 0.001:
+        return "<0.001"
+    exact = Decimal(str(value))
+    rounded = exact.quantize(Decimal(10) ** (exact.adjusted() - 1), rounding=ROUND_HALF_UP)
+    return format(rounded.normalize(), "f")
 
 
 def _stability(summary: ModelSummary) -> str:

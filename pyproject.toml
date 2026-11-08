@@ -1,6 +1,6 @@
 [project]
 name = "agentic-earth-observation"
-version = "0.1.0"
+version = "1.0.0"
 description = "A multi-agent Earth Observation assistant (LangGraph, MCP, A2A) and an evaluation of its tool use."
 readme = "README.md"
 license = "Apache-2.0"

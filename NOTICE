@@ -18,8 +18,8 @@ tests/ (the recorded responses under tests/cassettes/, and scene identifiers rep
   used in the tests. Copernicus Sentinel data are provided free of charge under the Copernicus data policy:
   https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice
 
-results/runs/ and results/summary.md (the records of the evaluation runs, and the report on them)
-  Contain modified Copernicus Sentinel data (2025): scene metadata (identifiers, acquisition times, cloud
+results/runs/ (the records of the evaluation runs)
+  Contain modified Copernicus Sentinel data (2024-2025): scene metadata (identifiers, acquisition times, cloud
   cover and platform of Sentinel-1 and Sentinel-2 scenes), retrieved on 2026-11-08 from the Earth Search STAC
   API by Element 84 during the runs. Copernicus Sentinel data are provided free of charge under the Copernicus
   data policy (link above). The search boxes in the records come from data/gazetteer.json, derived from

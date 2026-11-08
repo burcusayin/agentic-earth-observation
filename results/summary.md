@@ -29,7 +29,7 @@ A task's result for a model is the majority of its runs; a task without one is l
 
 | First | Second | Only the first passed | Only the second passed | Left out (no majority) | p | Both passed | Both failed |
 |---|---|---|---|---|---|---|---|
-| qwen3.5:9b | ministral-3:8b | 3 | 1 | 0 | 0.62 | 14 | 0 |
+| qwen3.5:9b | ministral-3:8b | 3 | 1 | 0 | 0.63 | 14 | 0 |
 
 ## qwen3.5:9b
 

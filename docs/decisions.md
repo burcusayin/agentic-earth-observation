@@ -564,9 +564,9 @@ changed:
   tasks whose earlier turns passed, as `docs/evaluation.md` already conditions them.
 
 ## 2026-11-08
-The report (`evals/report.py`, `evals/stats.py`, `eo-agent report`), written to `docs/evaluation.md`
-(frozen) and the decisions above, then reviewed by a separate read-only session, whose findings are folded in
-below. Where the frozen text leaves a choice open, these are the choices:
+The report (`evals/report.py`, `evals/stats.py`, `eo-agent report`), written to follow the rules of
+`docs/evaluation.md` (frozen) and the decisions above, then reviewed by a separate read-only session, whose
+findings are folded in below. Where the frozen text leaves a choice open, these are the choices:
 
 - **Which runs count:** only a run that ended `complete`, from a clean checkout, on the frozen files and the
   split's tasks, in a folder named after its run id (not a link, not a copy), with a `run.json` whose counts
@@ -578,7 +578,8 @@ below. Where the frozen text leaves a choice open, these are the choices:
 - **One setup:** the latest counted run sets it; an earlier run whose code (commits may differ only in
   `results/`), prompts, tool descriptions, settings, model options, task order's seed, reference date or Ollama
   version differ, that ran another build of the same model, or one checkout of which had uncommitted changes and
-  the other not, is listed as "other setup" with what differs, and not counted. After a fix, both sets of runs are then listed, as 2026-11-05 asks, instead of the report refusing.
+  the other not, is listed as "other setup" with what differs, and not counted. After a fix, both sets of runs
+  are then listed, as 2026-11-05 asks, instead of the report refusing.
   `--allow-dirty` counts dirty runs for scratch use, and the report then says it is not for publication.
 - **A task's result in a run** is its last attempt's: passed, failed, errored (a bug of ours: counted as failed,
   and listed apart, by the run's column) or lost (every attempt fell to the infrastructure).
@@ -632,3 +633,18 @@ below. Where the frozen text leaves a choice open, these are the choices:
   mind (above). The records and the report were committed as they were written. Since test-split results have
   now been seen, the prompts and tool descriptions stay as they are for v1.0 (`CLAUDE.md`); the results and
   their analysis are in `docs/results.md`.
+- **Before the release, a last read-only review of the whole repository,** as a stranger would read it: the
+  commands, the docs against the data, every tracked file, the history, the pull requests and the CI logs. Nothing
+  private was found, and every headline number was recomputed from the records. What it changed:
+  - p-values are rounded half up: the comparison's exact p of 0.625 read "0.62", because Python rounds an exact
+    tie to the even digit. It now reads "0.63"; `results/summary.md` was made again, and that cell is the only line
+    that changed.
+  - The version is 1.0.0, in `pyproject.toml`, `uv.lock` and the catalogue client's User-Agent. The recorded
+    cassettes keep the User-Agent they were recorded with: they are matched without headers.
+  - `NOTICE` credits the Copernicus data in `results/runs/` as 2024-2025 (the records hold scenes of both years),
+    and no longer names `results/summary.md`, which holds no scene data. The README credits the run records too.
+  - The README says what the leakage test covers, and points to what it cannot see.
+  - `.gitignore` covers editors' folders and Claude Code's local files, its tracked project settings excepted.
+  - Left as they are, with the reason: the pre-commit hooks are pinned by tag, not by commit (the actions in CI
+    are pinned by commit); `langchain-mistralai` stays a dependency for the Mistral runs of a follow-up milestone;
+    the `Read(./.env.*)` deny rule also keeps `.env.example` from Claude Code, the safer side of that choice.

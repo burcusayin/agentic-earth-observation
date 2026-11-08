@@ -29,6 +29,14 @@ CLAUDE.local.md
 !.env.example
 .envrc
 .claude/settings.local.json
+# Claude Code's local files (worktrees, caches); its project settings are tracked
+.claude/*
+!.claude/settings.json
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
 *.key
 *.pem
 secrets/
