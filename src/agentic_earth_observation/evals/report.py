@@ -51,6 +51,7 @@ from agentic_earth_observation.evals.stats import (
     stability,
     task_share,
 )
+from agentic_earth_observation.retrieval_agent.models import Usage
 
 RunState = Literal[
     "did_not_start",
@@ -446,6 +447,16 @@ class Cost(BaseModel):
     median_output_tokens: float
 
 
+class RunSeconds(BaseModel):
+    """One run's time over its scored attempts: the runner's clock and the model server's."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tasks: int
+    seconds: float
+    model_seconds: float
+
+
 class ModelSummary(BaseModel):
     """Everything the report says about one model, over its runs that count."""
 
@@ -457,6 +468,7 @@ class ModelSummary(BaseModel):
     runs: list[str]
     run_counts: list[TaskCounts]
     warm_up_seconds: list[float | None]  # each run's warm-up after its fresh load; None before it existed
+    run_seconds: list[RunSeconds]  # each run's time, so that a drift from run to run shows
     tasks: int
     with_result: int  # tasks with a result in at least one run
     lost_excluded: Interval | None  # passed tasks, lost runs left out; None when no task has a result
@@ -548,6 +560,7 @@ def _model_summary(
         runs=[run.folder for run in runs],
         run_counts=[record.tasks for record in records],
         warm_up_seconds=[record.warm_up_seconds for record in records],
+        run_seconds=[_run_seconds(_scored_last_attempts(run)) for run in runs],
         tasks=len(tasks),
         with_result=len(with_result),
         lost_excluded=bootstrap_interval(with_result, _passed_left_out) if with_result else None,
@@ -645,20 +658,29 @@ def _mean(values: Sequence[float | None]) -> Mean | None:
     return Mean(value=sum(present) / len(present), turns=len(present)) if present else None
 
 
+def _usages(turn: TurnRecord) -> list[Usage]:
+    """The model's usage in a turn: the decision's, and the retrieval agent's when it was called."""
+    if turn.output is None:
+        return []
+    retrieval = [turn.output.retrieval.usage] if turn.output.retrieval is not None else []
+    return [turn.output.decision_usage, *retrieval]
+
+
+def _run_seconds(attempts: Sequence[AttemptRecord]) -> RunSeconds:
+    turns = [turn for attempt in attempts for turn in attempt.turns]
+    return RunSeconds(
+        tasks=len(attempts),
+        seconds=sum(turn.seconds for turn in turns),
+        model_seconds=sum(usage.model_seconds for turn in turns for usage in _usages(turn)),
+    )
+
+
 def _cost(attempts: Sequence[AttemptRecord]) -> Cost | None:
     if not attempts:
         return None
     columns: dict[str, list[float]] = {"seconds": [], "model": [], "load": [], "input": [], "output": []}
     for attempt in attempts:
-        usages = [
-            usage
-            for turn in attempt.turns
-            if turn.output is not None
-            for usage in (
-                turn.output.decision_usage,
-                *([turn.output.retrieval.usage] if turn.output.retrieval else []),
-            )
-        ]
+        usages = [usage for turn in attempt.turns for usage in _usages(turn)]
         columns["seconds"].append(sum(turn.seconds for turn in attempt.turns))
         columns["model"].append(sum(usage.model_seconds for usage in usages))
         columns["load"].append(sum(usage.load_seconds for usage in usages))
@@ -858,6 +880,12 @@ def _model_section(summary: ModelSummary) -> list[str]:
         f"| Tool calls under no trace id of the run | {summary.unattributed_calls} |",
         "| Warm-up after each run's fresh load of the model, seconds | "
         f"{_warm_ups(summary.warm_up_seconds)} |",
+        "| Seconds in turns per run, over its scored tasks | "
+        + ", ".join(f"{run.seconds:.1f} ({_count(run.tasks, 'task')})" for run in summary.run_seconds)
+        + " |",
+        "| Model seconds per run, over its scored tasks | "
+        + ", ".join(f"{run.model_seconds:.1f}" for run in summary.run_seconds)
+        + " |",
     ]
     if summary.cost is not None:
         cost = summary.cost
