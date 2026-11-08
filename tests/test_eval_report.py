@@ -1326,7 +1326,17 @@ class TestReviewFindings:
 
 class TestPValues:
     @pytest.mark.parametrize(
-        ("value", "shown"), [(1.0, "1"), (0.21875, "0.22"), (0.03125, "0.031"), (0.0004, "<0.001")]
+        ("value", "shown"),
+        [
+            (1.0, "1"),
+            (0.21875, "0.22"),
+            (0.03125, "0.031"),
+            (0.0004, "<0.001"),
+            (0.625, "0.63"),  # an exact tie rounds up, as read by hand, not to the even digit
+            (0.125, "0.13"),
+            (0.0625, "0.063"),
+            (0.1, "0.1"),
+        ],
     )
     def test_small_values_are_never_shown_as_zero(self, value: float, shown: str) -> None:
         assert report._p(value) == shown

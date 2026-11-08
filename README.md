@@ -47,8 +47,9 @@ The golden set has 22 tasks: 4 for development and 18 for testing.
   requests including a prompt injection, unknown or misspelt places, radar with a cloud limit, dates before a
   satellite launched, and a search with no results.
 - **Frozen first:** the test split, the labelling rules, the scoring code and the gazetteer were frozen (git tag
-  `golden-test-v1`) before any agent prompt was written. A test checks that the system code and scripts never
-  mention test-split places, questions or dates.
+  `golden-test-v1`) before any agent prompt was written. A test checks that the code the agents run, the text
+  they read and the scripts do not mention test-split places, questions or dates; what it cannot see is recorded in
+  [docs/decisions.md](docs/decisions.md) (2026-11-07).
 - **Tuned on dev only:** a prompt change is kept only if it raises pass rates on dev and synthetic cases
   (`scripts/probe_models.py`, repeated runs on both local models) and lowers none. The numbers are in
   [docs/decisions.md](docs/decisions.md).
@@ -73,7 +74,7 @@ Both local models, three runs each over the 18 test tasks (2026-11-08, from a cl
 | Answers citing a scene no tool returned | 0 | 0 |
 | Seconds per task, median | 16.3 | 10.4 |
 
-The models differ on 4 tasks (3 passed by qwen3.5:9b only, 1 by ministral-3:8b only; exact sign test p = 0.62):
+The models differ on 4 tasks (3 passed by qwen3.5:9b only, 1 by ministral-3:8b only; exact sign test p = 0.63):
 with 18 tasks, the difference does not show that either is better. The task-by-task analysis and the limitations,
 among them timings taken on a fanless laptop, are in [docs/results.md](docs/results.md); the full report is
 [results/summary.md](results/summary.md), and every run's records are in `results/runs/`.
@@ -194,5 +195,7 @@ The code is licensed under the [Apache License 2.0](LICENSE). The data is not, a
 [`NOTICE`](NOTICE):
 - **`data/gazetteer.json`** is derived from OpenStreetMap: © OpenStreetMap contributors, under the
   [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
+- **The run records in `results/runs/`** contain modified Copernicus Sentinel data (2024-2025), obtained
+  through Earth Search during the runs, and search boxes from the gazetteer.
 - **The recorded test fixtures** contain modified Copernicus Sentinel data (2025), obtained through Earth
   Search.

@@ -42,7 +42,7 @@ stops at its first failed turn: ministral's failed follow-up never reached its s
 ### The two models compared
 
 On 14 tasks both models passed, on 3 only qwen3.5:9b did, on 1 only ministral-3:8b, and on none did both fail.
-The exact sign test on the 4 tasks where they differ gives p = 0.62.
+The exact sign test on the 4 tasks where they differ gives p = 0.63.
 
 **This is not evidence that one model is better.** With 18 tasks, one task is 5.6 points; the rules, written
 before any run, estimate a single model's interval at roughly 20 points either way (here 15 to 18 and 12 to 18

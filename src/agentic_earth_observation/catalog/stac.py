@@ -33,7 +33,7 @@ from agentic_earth_observation.domain import BBox, Product, SearchRequest
 logger = logging.getLogger(__name__)
 
 EARTH_SEARCH_URL = "https://earth-search.aws.element84.com/v1"
-USER_AGENT = "agentic-earth-observation/0.1 (+https://github.com/burcusayin/agentic-earth-observation)"
+USER_AGENT = "agentic-earth-observation/1.0 (+https://github.com/burcusayin/agentic-earth-observation)"
 RETRY_AFTER_MAX_S = 10  # the longest pause a Retry-After header gets before the next try
 
 # Product names used by the tools, mapped to Earth Search collection ids. Every product must be listed: a
