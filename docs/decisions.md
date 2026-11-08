@@ -562,3 +562,57 @@ changed:
   verdict: the whole attempt was retried, and the model got another go at the turn it had failed. The later
   turns of a failed attempt are therefore not in its record, and the final-turn numbers of the report are over
   tasks whose earlier turns passed, as `docs/evaluation.md` already conditions them.
+
+## 2026-11-08
+The report (`evals/report.py`, `evals/stats.py`, `eo-agent report`), written to `docs/evaluation.md`
+(frozen) and the decisions above, then reviewed by a separate read-only session, whose findings are folded in
+below. Where the frozen text leaves a choice open, these are the choices:
+
+- **Which runs count:** only a run that ended `complete`, from a clean checkout, on the frozen files and the
+  split's tasks, in a folder named after its run id (not a link, not a copy), with a `run.json` whose counts
+  agree with `attempts.jsonl` and attempts whose verdicts agree with their turns (a passed attempt has all its
+  task's turns, none failed; a failed one stops at its first failed turn). Every other run is listed with the
+  reason: did not start, unreadable, crashed or still running, aborted, dirty checkout, other golden set,
+  inconsistent, other setup. Hidden folders are not runs. A record that cannot be read is listed unless it names
+  the other split. A reason never quotes a record's text, which could hold a task or an answer.
+- **One setup:** the latest counted run sets it; an earlier run whose code (commits may differ only in
+  `results/`), prompts, tool descriptions, settings, model options, task order's seed, reference date or Ollama
+  version differ, that ran another build of the same model, or one checkout of which had uncommitted changes and
+  the other not, is listed as "other setup" with what differs, and not counted. After a fix, both sets of runs are then listed, as 2026-11-05 asks, instead of the report refusing.
+  `--allow-dirty` counts dirty runs for scratch use, and the report then says it is not for publication.
+- **A task's result in a run** is its last attempt's: passed, failed, errored (a bug of ours: counted as failed,
+  and listed apart, by the run's column) or lost (every attempt fell to the infrastructure).
+- **The headline:** a model's passed tasks are the sum over tasks of the share of its runs that passed, with lost
+  runs left out (out of the tasks with a result) and counted as failed (out of all tasks). The 95% interval is the
+  percentile bootstrap of that sum: 10,000 resamples of whole tasks, each with its runs, seed 1.
+- **Stability:** the share of tasks with the same result in every run; a lost run breaks it, since it says
+  nothing about the model. With one run the report says so instead of 100%. A model with other than 3 runs is
+  reported with the number it has, and the report says the rules call for 3.
+- **Between two models:** a task's result is the majority of its runs with a result; an even split is no
+  majority, and the task is left out of the test and counted. The exact two-sided sign test is on the tasks only
+  one of them passed. The noise figures of `docs/evaluation.md` are quoted only for the 18 tasks they are for.
+- **Secondary measures** are taken from the scored attempts only: first and last search call accuracy on turns
+  that expected a search, asking and declining instead of searching on those turns, scene precision and recall
+  as the mean over turns of what the runner recorded for each (a turn citing many scenes weighs as one; a turn
+  that cited nothing has no precision; a failed catalogue query leaves its turn out and is counted), model
+  failures by kind, grounding failures. Seconds, model seconds and tokens per task are medians, with the 90th
+  percentile of seconds, over the same attempts; attempts and tasks lost to the infrastructure are counted next
+  to them. Since an attempt stops at its first failed turn, these cover the turns that ran, and the report says
+  so.
+- **The notes say what the data shows:** the temperature the runs recorded, and grounding as a property of the
+  design only when no answer cited a scene no tool returned.
+- **Not changed, with the reason:** with the two local models there is one comparison, not the six among four
+  models the frozen rules foresee; the report states how many it makes.
+- **Every run loads its model afresh, then warms it up** (`evals/model_server.py`; found by a dress rehearsal of
+  both models, 3 runs each, on the dev split). qwen3.5:9b's first run took 75 to 76 model seconds, its second and
+  third 35 to 40, with the same prompt tokens and a load under a second. The cause, measured against Ollama
+  0.40.1 directly: it answers a prompt it has seen from a cache (prompt evaluation in 0.04 s instead of 6 to 10 s)
+  while still reporting every prompt token; it keeps at least four whole prompts; for qwen3.5:9b only an exact
+  repeat is cached, so a run's own prompts gain nothing from each other; and an unload with a fresh load empties
+  the cache. At temperature 0 a run repeats the prompts of the run before, so the runs after the first measured
+  the cache, not the model. The runs were not slowed by a cold start: qwen3.5:9b's first call after a load costs
+  no more than any other, and ministral-3:8b's about 1.3 s more. So `prepare` now unloads the model too, and a
+  run then makes one warm-up call on unrelated text (it names nothing of the golden set, so its cache serves no
+  task) at the run's context; its seconds go into the run record. This first planned a warm-up alone, which the
+  measurements showed would have fixed nothing. The scores did not depend on it: every task had the same result
+  in every run of the rehearsal, cached or not.

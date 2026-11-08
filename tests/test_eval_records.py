@@ -764,3 +764,27 @@ def test_an_attempt_whose_writing_was_cut_short_did_not_finish(tmp_path: Path) -
     line = attempt().model_dump_json()
     (tmp_path / ATTEMPTS_FILE).write_text(f"{line}\n{line[:40]}", encoding="utf-8")
     assert len(read_attempts(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("name", ["run.json", "attempts.jsonl"])
+def test_a_record_that_is_not_utf8_text_is_a_record_error(tmp_path: Path, name: str) -> None:
+    write_run_record(tmp_path, run_record())
+    (tmp_path / name).write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(RecordError, match=rf"{name} is not UTF-8 text \(byte 0\)"):
+        read_run_record(tmp_path) if name == "run.json" else read_attempts(tmp_path)
+
+
+def test_a_bad_attempt_line_names_its_number(tmp_path: Path) -> None:
+    append_attempt(tmp_path, attempt())
+    with (tmp_path / "attempts.jsonl").open("a", encoding="utf-8") as out:
+        out.write('{"not": "an attempt"}\n')
+    with pytest.raises(RecordError) as raised:
+        read_attempts(tmp_path)
+    assert raised.value.line == 2
+
+
+def test_the_warm_up_time_is_optional_and_never_negative() -> None:
+    assert run_record().warm_up_seconds is None  # records made before the warm-up still read
+    assert run_record(warm_up_seconds=1.5).warm_up_seconds == 1.5
+    with pytest.raises(ValidationError, match="warm_up_seconds"):
+        run_record(warm_up_seconds=-0.1)

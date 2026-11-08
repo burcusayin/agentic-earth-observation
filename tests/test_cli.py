@@ -14,15 +14,18 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_earth_observation import cli
+from agentic_earth_observation.catalog.gazetteer import GazetteerError
 from agentic_earth_observation.config import Settings
-from agentic_earth_observation.evals.golden import GoldenError
+from agentic_earth_observation.evals.golden import GoldenError, golden_hash, load_golden
 from agentic_earth_observation.evals.model_server import ModelServerError
 from agentic_earth_observation.evals.records import (
+    AttemptRecord,
     CodeVersion,
     Hashes,
     ModelBuild,
     ProvenanceError,
     RunRecord,
+    TaskCounts,
 )
 from agentic_earth_observation.evals.run_eval import MODELS_UNDER_EVALUATION, EvaluationError
 from agentic_earth_observation.evals.servers import ServerError
@@ -30,6 +33,9 @@ from agentic_earth_observation.orchestrator.client import RetrievalAgentError
 from agentic_earth_observation.orchestrator.graph import Orchestrator
 from agentic_earth_observation.retrieval_agent.models import PreviousSearch, RetrievalResult
 from tests.fakes import NEVER_FINISHES, SCENE, FakeClient, FakeOllama, OllamaStep, ollama_tool_call
+from tests.test_eval_records import turn as report_turn
+from tests.test_eval_report import hashes as report_hashes
+from tests.test_eval_report import write_attempts
 
 pytestmark = pytest.mark.anyio
 
@@ -441,3 +447,120 @@ async def test_the_real_chat_closes_its_client_without_any_request(
     monkeypatch.setattr("builtins.input", ended)
     monkeypatch.setattr("builtins.print", lambda *args: None)
     await cli._chat_with_the_running_servers(settings(), TODAY)
+
+
+class TestReport:
+    """`eo-agent report`: it reads records only, so it needs no settings, server or model."""
+
+    def dev_run(self, runs: Path, *, dirty: bool) -> None:
+        """A passed run of the real dev split: every task with as many scored turns as it has."""
+        dev = [task for task in load_golden() if task.split == "dev"]
+        write_attempts(
+            runs,
+            "r1",
+            [
+                AttemptRecord(
+                    run_id="r1",
+                    task_id=task.id,
+                    attempt=1,
+                    outcome="scored",
+                    passed=True,
+                    turns=[report_turn() for _ in task.turns],
+                )
+                for task in dev
+            ],
+            task_order=[task.id for task in dev],
+            tasks=TaskCounts(passed=len(dev)),
+            hashes=report_hashes(golden=golden_hash()),
+            code=CodeVersion(commit="0123456789abcdef0123456789abcdef01234567", dirty=dirty),
+        )
+
+    def test_before_the_first_run_for_the_report_it_says_so_and_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "REPORT_RUNS", tmp_path / "runs")  # the default folder, not made yet
+        assert cli.main(["report", "--split", "test"]) == 0
+        out = capsys.readouterr().out
+        assert out.startswith("# Evaluation report: test split\n")
+        assert "No run counts yet." in out
+
+    def test_a_run_from_a_checkout_with_changes_counts_only_when_allowed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.dev_run(tmp_path, dirty=True)
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path)]) == 0
+        assert "| r1 | dirty checkout |" in capsys.readouterr().out
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path), "--allow-dirty"]) == 0
+        out = capsys.readouterr().out
+        assert "| r1 | counted |" in out
+        assert "not for publication" in out
+        assert "| qwen3.5:9b | 4.0 of 4 (" in out
+
+    def test_the_report_is_written_to_a_file_when_asked(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.dev_run(tmp_path / "runs", dirty=False)
+        target = tmp_path / "out" / "summary.md"
+        assert (
+            cli.main(
+                ["report", "--split", "dev", "--runs-dir", str(tmp_path / "runs"), "--output", str(target)]
+            )
+            == 0
+        )
+        assert capsys.readouterr().out == f"report written to {target}\n"
+        assert "| r1 | counted |" in target.read_text(encoding="utf-8")
+
+    def test_a_folder_of_runs_that_is_a_file_is_an_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "runs").write_text("", encoding="utf-8")
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path / "runs")]) == 1
+        captured = capsys.readouterr()
+        assert (captured.out, captured.err) == (
+            "",
+            "error: runs is not a folder: give the folder that holds the runs' folders\n",
+        )
+
+    def test_a_report_that_cannot_be_written_is_an_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "taken").write_text("", encoding="utf-8")
+        target = tmp_path / "taken" / "summary.md"  # its folder is a file
+        assert (
+            cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path), "--output", str(target)]) == 1
+        )
+        assert capsys.readouterr().err.startswith(f"error: the report cannot be written to {target}: ")
+
+    def test_a_folder_of_runs_given_that_does_not_exist_is_an_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        typo = tmp_path / "rnus"
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(typo)]) == 1
+        assert capsys.readouterr().err == f"error: there is no folder {typo}: check --runs-dir\n"
+
+    def test_a_gazetteer_that_cannot_be_read_is_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def broken() -> None:
+            raise GazetteerError("data/gazetteer.json is not a gazetteer")
+
+        monkeypatch.setattr(cli, "load_golden", broken)
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path)]) == 1
+        assert capsys.readouterr().err == "error: data/gazetteer.json is not a gazetteer\n"
+
+    def test_a_folder_that_cannot_be_read_is_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def denied(*args: object, **kwargs: object) -> None:
+            raise PermissionError(13, "Permission denied", str(tmp_path))
+
+        monkeypatch.setattr(cli, "collect_runs", denied)
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path)]) == 1
+        assert capsys.readouterr().err == f"error: {tmp_path} cannot be read: Permission denied\n"
+
+    def test_it_reads_no_settings(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def no_settings() -> None:
+            raise AssertionError("the report needs no settings")
+
+        monkeypatch.setattr(cli, "Settings", no_settings)
+        assert cli.main(["report", "--split", "dev", "--runs-dir", str(tmp_path)]) == 0

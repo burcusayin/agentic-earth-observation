@@ -356,7 +356,8 @@ async def _run(
             f"warning: Ollama {version}: how its errors are read was checked on {OLLAMA_CHECKED} (see llm.py)"
         )
     async with services.servers(settings, folder) as servers:
-        loaded = await model_server.prepare(model, OLLAMA_CONTEXT)
+        loaded = await model_server.prepare(model, OLLAMA_CONTEXT)  # a fresh load: no cache of the run before
+        warm_up_seconds = await model_server.warm_up(model, OLLAMA_CONTEXT)
         build = ModelBuild(
             provider=settings.llm_provider,
             model=model,
@@ -376,6 +377,7 @@ async def _run(
             reference_date=plan.reference_date,
             shuffle_seed=plan.shuffle_seed,
             task_order=[task.id for task in plan.tasks],
+            warm_up_seconds=warm_up_seconds,
             settings=recorded_settings(settings),
             libraries=library_versions(),
             platform=platform.platform(),

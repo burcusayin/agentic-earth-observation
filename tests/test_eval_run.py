@@ -343,6 +343,7 @@ class FakeModelServer:
         self.models = set(models)
         self.calls: list[str] = []
         self.prepare_fails: str | None = None
+        self.warm_up_fails: str | None = None
         self.unload_fails: str | None = None
         self.server_version = "0.40.1"
 
@@ -366,6 +367,12 @@ class FakeModelServer:
         if self.prepare_fails is not None:
             raise ModelServerError(self.prepare_fails)
         return LoadedModel(model=model, digest="d63f" * 16, context_length=context)
+
+    async def warm_up(self, model: str, context: int) -> float:
+        self.calls.append(f"warm up {model} {context}")
+        if self.warm_up_fails is not None:
+            raise ModelServerError(self.warm_up_fails)
+        return 1.25
 
     async def unload(self, model: str) -> None:
         self.calls.append(f"unload {model}")
@@ -1292,17 +1299,23 @@ class TestEvaluate:
             assert len(read_attempts(folder)) == 4
             assert (folder / TOOL_LOG_FILE).exists()
         assert all(made.stopped for made in world.servers)
+        # Every run loads its model afresh and warms it up before its first task (decision of 2026-11-08).
         assert world.model_server.calls == [
             f"has {MODEL}",
             f"has {OTHER_MODEL}",
             f"prepare {MODEL} {OLLAMA_CONTEXT}",
+            f"warm up {MODEL} {OLLAMA_CONTEXT}",
             f"prepare {MODEL} {OLLAMA_CONTEXT}",
+            f"warm up {MODEL} {OLLAMA_CONTEXT}",
             f"unload {MODEL}",
             f"prepare {OTHER_MODEL} {OLLAMA_CONTEXT}",
+            f"warm up {OTHER_MODEL} {OLLAMA_CONTEXT}",
             f"prepare {OTHER_MODEL} {OLLAMA_CONTEXT}",
+            f"warm up {OTHER_MODEL} {OLLAMA_CONTEXT}",
             f"unload {OTHER_MODEL}",
             "closed",
         ]
+        assert {record.warm_up_seconds for record in records} == {1.25}
 
     async def test_a_run_of_another_model_than_the_default_checks_against_its_own(
         self, tmp_path: Path
@@ -1528,6 +1541,22 @@ class TestEvaluate:
             await world.evaluate(models=[MODEL], runs=1)
         assert world.servers[0].stopped
         assert world.model_server.calls[-2:] == [f"unload {MODEL}", "closed"]
+
+    async def test_a_warm_up_that_fails_stops_the_run_before_its_record_and_its_tasks(
+        self, tmp_path: Path
+    ) -> None:
+        world = World(tmp_path, passing_script())
+        world.model_server.warm_up_fails = "Ollama answered /api/chat with 500: runner stopped"
+        with pytest.raises(ModelServerError, match="runner stopped"):
+            await world.evaluate(models=[MODEL], runs=1)
+        assert world.servers[0].stopped
+        assert world.model_server.calls[-3:] == [
+            f"warm up {MODEL} {OLLAMA_CONTEXT}",
+            f"unload {MODEL}",
+            "closed",
+        ]
+        (folder,) = (world.root / "raw").iterdir()  # the run's folder was made: its servers started there
+        assert not (folder / "run.json").exists()  # no record says `running` for a run that never ran
 
     async def test_a_run_whose_clients_cannot_be_made_leaves_no_record_saying_running(
         self, tmp_path: Path
