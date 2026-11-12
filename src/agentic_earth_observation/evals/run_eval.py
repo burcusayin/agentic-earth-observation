@@ -589,13 +589,17 @@ def _notice_an_empty_catalogue(oracle: OracleCheck, task: Task, run: _Running) -
         )
 
 
+class UnknownPlace(LookupError):
+    """An expected search names a place the gazetteer does not have."""
+
+
 def oracle_request(search: ExpectedSearch, gazetteer: Gazetteer) -> SearchRequest:
     """The direct catalogue query for an expected search (docs/evaluation.md, Reported alongside): the
     place's box, the top of the accepted cloud range, and the expected limit, or ORACLE_LIMIT when the task
     asks for no number of scenes. LookupError for a place the gazetteer does not have."""
     place = gazetteer.resolve(search.place)
     if place is None:
-        raise LookupError(f"the expected place {search.place!r} is not in the gazetteer")
+        raise UnknownPlace(f"the expected place {search.place!r} is not in the gazetteer")
     return SearchRequest.model_validate(
         {
             "product": search.product,
@@ -611,7 +615,7 @@ async def _oracle(search: ExpectedSearch, output: TurnOutput, catalog: Catalog, 
     """The direct catalogue query of a turn that expects a search (docs/evaluation.md, Reported alongside)."""
     try:
         request = oracle_request(search, plan.gazetteer)
-    except LookupError as err:  # load_golden checked every expected place against the gazetteer
+    except UnknownPlace as err:  # load_golden checked every expected place against the gazetteer
         raise Aborted(f"a bug in the runner: {err}") from err
     limit = request.limit
     try:

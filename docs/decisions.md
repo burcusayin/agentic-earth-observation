@@ -686,13 +686,32 @@ plan:
     split), so the new tasks ask about the eight places of the test split again.
 - **No new labelling rule.** A task that would need a rule `docs/evaluation.md` does not state is left out, so that
   the prompts of v1.0 are measured on rules they were told (2026-11-02).
-- **Who writes the new tasks.** A separate session writes them from the labelling rules and checks every expected
-  search against the catalogue. Another separate session then labels them a second time, from the questions alone,
-  and the maintainer decides every disagreement and reads every task. The session that writes prompts and the
-  improvement reads neither the test split nor the candidates: the commands that check them
-  (`evals/candidates.py`) print totals only, and write what they find to a file.
+- **Who writes and checks the new tasks.** The session that writes prompts and the improvement reads neither the
+  test split nor the candidates: the commands that check them (`evals/candidates.py`) print totals only, on both
+  output streams, and write what they find to a file. The tasks were the work of separate sessions of the same
+  assistant, each with a written brief and none with another's memory:
+  1. One wrote the 32 tasks from the labelling rules and the v1 split, and checked every expected search against
+     the catalogue.
+  2. One labelled them a second time from the questions. It read the rules and the existing splits, as the first
+     did, and not the first session's answers.
+  3. Two reviewed the tasks to find fault with them, independently: one went through the tasks with the rules open,
+     the other read only the questions first and wrote down every way to read each before it saw an expected
+     answer.
+  4. One checked each finding, changed the tasks where a finding held, and asked the catalogue again for the
+     searches it had changed.
+  5. One labelled the final questions again, and one reviewed the changed tasks.
+  - **The maintainer did not read the new tasks.** The plan was that the maintainer would decide every
+    disagreement and read every task. There was no time for it, and steps 3 to 5 took its place. No person has
+    checked the 32 new tasks; all their checks are by sessions of one model family, which can share a blind spot.
+  - **What the checks found.** Both second labellings agreed with the tasks on 32 of 32. The two reviewers raised
+    four findings, none of them a wrong, ambiguous or unscorable expected answer: two against the brief's
+    requirements, one weak task, one note. Three were accepted and one was the same as another. Four tasks changed:
+    three were reworded, their expected searches with them, and one had its note corrected. The review of those
+    four raised no finding.
   - This separation is by procedure. On one machine with one maintainer nothing enforces it; what the record can
-    show is the order: the tag, the improvement's commit, the start of the runs.
+    show is the order: the tag, the improvement's commit, the start of the runs. That each session read and ran
+    only what its brief allowed was checked afterwards from the record of its tool calls, with scripts that print
+    file paths and counts; that record is not in the repository.
   - Publishing only a hash of the new tasks until the improvement is finished was considered and not adopted: with
     the tasks on the same machine either way, it would show no more than that order.
 - **The ids of the new tasks carry their groups** (`evals/groups.py`): they start with `v2-`, and a relative-date
@@ -708,12 +727,13 @@ plan:
   scans.
 - **Registered before any run on the v2 test split:**
   - **Target:** relative dates, if a local model fails a relative-date probe case in at least 3 of its 5 runs;
-    otherwise the next failure of v1.0 that shows on the dev split (ministral-3:8b declining requests in other
-    languages, 2026-11-03).
+    otherwise the next failure of v1.0 that shows on the dev split (ministral-3:8b does not delegate the dev
+    split's German question, 2026-11-03).
   - **Order:** the improvement is finished on its branch before the first run on the v2 test split starts. Its
     pull request changes nothing under `evals/`, `data/` or `docs/evaluation.md`.
   - **Primary result:** qwen3.5:9b on the new relative-date tasks, before and after, each task by the majority of
-    its 3 runs, shown per period as counts.
+    its 3 runs, shown per period as counts. If the target is the other one, the primary result is ministral-3:8b
+    on the three new tasks in other languages, as counts; three tasks can show a direction and no more.
   - **No significance is claimed for it.** Tasks that ask for the same period are not independent, and with five
     periods an exact two-sided sign test cannot go below p = 0.0625 (it takes six that all change the same way for
     0.031). The p-value is printed with that note. Rules for more periods would be a second round, measured again.
@@ -741,7 +761,7 @@ plan:
   | Relative dates | For the new relative-date tasks, the tasks passed per period, before and after. A period passes when all its tasks pass. The sign test is over the five periods and is printed with the note that it cannot go below 0.0625. |
   | Session noise | The 18 tasks of v1 in the runs of v1.0 against the baseline on the v2 split. |
   | Determinism | Over the turns that every run of a model reached: the share where all runs made the same tool calls (names, arguments, order), and the share where they also cited the same scenes. Within a setup, and between the two setups of the session-noise comparison. |
-  | Noise with 50 tasks | One task is 2 points. A single model's interval is about ±12 points. A difference between two models of less than about 16 to 20 points (8 to 10 tasks) can be noise. |
+  | Noise with 50 tasks | One task is 2 points. A single model's interval is about ±11 to ±14 points. A difference between two different models of less than about 16 to 20 points (8 to 10 tasks) can be noise. |
 
   - The noise figures are the normal approximation of a 95% interval, 1.96 · sqrt(p(1 − p)/n), and sqrt(2) times
     it for the difference between two models, at pass rates p of 0.5, 0.75 and 0.8. For n = 50 that is ±13.9,
@@ -749,6 +769,11 @@ plan:
   - `docs/evaluation.md` does not say how its figures for 18 tasks were made (±20 points; 25 to 35 points, 5 or 6
     tasks). The same calculation gives ±20.0 points at p = 0.75, and 26 to 33 points (4.7 to 5.9 tasks) between
     two models, so it agrees with them; it is a reconstruction, not the original working.
+  - These figures take the tasks to be independent. The new relative-date tasks that share a period are not, so the
+    real intervals are somewhat wider. The mix leans on what v1.0 failed, so a pass rate nearer 0.5 than 0.8, and
+    the wider figure, is the likelier case.
+  - The figure for two models does not apply to one model before and after a change. Those results are paired,
+    task by task, and are judged by the tasks that changed (the sign test of the second row).
 - **The checker resolves the five periods itself** (`period_dates` in `evals/candidates.py`). A relative-date task
   must expect a search over exactly the dates that the period in its id means on the reference date. Two
   labellings can make the same slip in a date; this check cannot. It is a second reading of two labelling rules, in
@@ -763,7 +788,27 @@ plan:
     where a clarification is.
   - It does not read the prompts, the probe script or the results: the tasks come from the rules and from what a
     user might ask.
-  - The check against the catalogue is made with `candidates live` only, within 60 requests.
+  - The check against the catalogue is made with `candidates live` only, within 60 requests. It was run three
+    times: on the 29 expected searches of the first draft, on 2 that the writing session then corrected, and on 4
+    that changed after the review. Every search found scenes. Counted from outside, that is 35 searches and one
+    request per run to open the catalogue. In those runs the client could still repeat a failed request up to
+    three times without showing it; since then the command asks without retries, stops at the first search that
+    fails, and writes each answer down as it comes.
   - Before the tasks join the split, the scan of `tests/test_no_leakage.py` is run on them (a local script calls
     the test's own functions with the candidates added in memory). A term that system code already contains is
     then found while the task can still be reworded.
+- **What `candidates check` refuses**, beyond the golden set's own checks: an id that does not start with `v2-` or
+  is taken; a question that an existing task or another candidate asks; a relative-date id whose question does not
+  name its period in the rules' words, or whose dates are not that period's; any other task that names such a
+  period; a place of the dev split; an expected search whose place no question names in a way the gazetteer
+  resolves; and notes that do not give the live check's date and a count of at least one scene for every expected
+  search. It cannot judge whether an expected answer is right: that rests on the sessions above.
+- **A second labelling is matched to its task by a key made of the task's questions,** and the questions are handed
+  over in the order of their keys. Labels made for a question that was later reworded then count for no task
+  instead of agreeing by their place in the file, and the place of a question does not give away its category.
+- **What rests on the briefs alone,** with nothing in the repository to show it: that the writing and reviewing
+  sessions did not read the prompts, the probe script or the results; that the three questions in other languages
+  and the two with typos are what they are meant to be; and that the plan was reviewed by a read-only session.
+- **Not yet in the code.** The report compares nothing between setups yet, uses none of the id groups, and counts
+  only runs of the current golden set, so the session-noise comparison with the runs of v1.0 needs it changed. That
+  is the next part of the work.

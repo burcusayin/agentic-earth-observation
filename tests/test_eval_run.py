@@ -20,7 +20,7 @@ from typing import Any, Self
 import pytest
 from pydantic import ValidationError
 
-from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.catalog.gazetteer import Gazetteer, Place
 from agentic_earth_observation.catalog.stac import CatalogRefused, SceneSummary, StacCatalog
 from agentic_earth_observation.catalog_mcp.tool_log import ToolCallLog, ToolCallRecord
 from agentic_earth_observation.config import Settings
@@ -572,6 +572,19 @@ class TestTheOracleQuery:
         ):
             await run_eval._oracle(search, DECLINED, run.catalog, plan)
         assert run.catalog.requests == []
+
+    async def test_another_lookup_error_is_not_taken_for_a_missing_place(self, tmp_path: Path) -> None:
+        # Only the place the gazetteer lacks is reported as the runner's bug: any other error keeps its type.
+        class Broken(Gazetteer):
+            def resolve(self, name: str) -> Place | None:
+                raise KeyError(name)
+
+        run = Run(tmp_path)
+        plan = dataclasses.replace(run.plan, gazetteer=Broken({}))
+        search = DEV_TASKS[0].turns[0].expect.search
+        assert search is not None
+        with pytest.raises(KeyError):
+            await run_eval._oracle(search, DECLINED, run.catalog, plan)
 
     async def test_recall_is_measured_when_the_task_asks_for_a_number_of_scenes(self, tmp_path: Path) -> None:
         text = "Two Sentinel-2 scenes of Milan from March 2025"
