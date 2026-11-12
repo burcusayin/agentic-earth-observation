@@ -6,6 +6,7 @@ and the tool-call log is a real file that the fake orchestrator writes as the MC
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import random
 import time
@@ -19,7 +20,7 @@ from typing import Any, Self
 import pytest
 from pydantic import ValidationError
 
-from agentic_earth_observation.catalog.gazetteer import Gazetteer
+from agentic_earth_observation.catalog.gazetteer import Gazetteer, Place
 from agentic_earth_observation.catalog.stac import CatalogRefused, SceneSummary, StacCatalog
 from agentic_earth_observation.catalog_mcp.tool_log import ToolCallLog, ToolCallRecord
 from agentic_earth_observation.config import Settings
@@ -559,6 +560,31 @@ class TestTheOracleQuery:
         weather = run.attempts()[3].turns[0]
         assert weather.oracle is None
         assert run.catalog.requests[1].max_cloud_cover is None  # a radar search has no cloud limit
+
+    async def test_an_expected_place_the_gazetteer_lacks_is_a_bug_of_the_runner(self, tmp_path: Path) -> None:
+        # load_golden checks every expected place against the gazetteer, so only a bug gets this far.
+        run = Run(tmp_path)
+        plan = dataclasses.replace(run.plan, gazetteer=Gazetteer({}))
+        search = DEV_TASKS[0].turns[0].expect.search
+        assert search is not None
+        with pytest.raises(
+            run_eval.Aborted, match="a bug in the runner: the expected place 'milan' is not in the gazetteer"
+        ):
+            await run_eval._oracle(search, DECLINED, run.catalog, plan)
+        assert run.catalog.requests == []
+
+    async def test_another_lookup_error_is_not_taken_for_a_missing_place(self, tmp_path: Path) -> None:
+        # Only the place the gazetteer lacks is reported as the runner's bug: any other error keeps its type.
+        class Broken(Gazetteer):
+            def resolve(self, name: str) -> Place | None:
+                raise KeyError(name)
+
+        run = Run(tmp_path)
+        plan = dataclasses.replace(run.plan, gazetteer=Broken({}))
+        search = DEV_TASKS[0].turns[0].expect.search
+        assert search is not None
+        with pytest.raises(KeyError):
+            await run_eval._oracle(search, DECLINED, run.catalog, plan)
 
     async def test_recall_is_measured_when_the_task_asks_for_a_number_of_scenes(self, tmp_path: Path) -> None:
         text = "Two Sentinel-2 scenes of Milan from March 2025"
@@ -1455,7 +1481,7 @@ class TestEvaluate:
             ("FROZEN_TEST_SPLIT", "changed since: the test split[.]"),
             ("FROZEN_EVALUATION_CODE", "changed since: the evaluation code[.]"),
             ("FROZEN_GAZETTEER", "changed since: the gazetteer[.]"),
-            ("FROZEN_EVALUATION_RULES", "changed since: the labelling rules[.]"),
+            ("FROZEN_EVALUATION_RULES", "changed since: docs/evaluation.md[.]"),
         ],
     )
     async def test_a_run_for_the_report_needs_the_frozen_files_as_they_were_frozen(
@@ -1463,7 +1489,7 @@ class TestEvaluate:
     ) -> None:
         monkeypatch.setattr(run_eval, constant, "0" * 64)
         world = World(tmp_path, passing_script())
-        with pytest.raises(EvaluationError, match=rf"frozen at tag golden-test-v1 and {named}"):
+        with pytest.raises(EvaluationError, match=rf"frozen at tag golden-test-v2 and {named}"):
             await world.evaluate(models=[MODEL], runs=1, for_report=True)
         (scratch,) = await world.evaluate(models=[MODEL], runs=1)
         assert scratch.status == "complete"
@@ -1474,7 +1500,7 @@ class TestEvaluate:
         monkeypatch.setattr(run_eval, "FROZEN_GAZETTEER", "0" * 64)
         monkeypatch.setattr(run_eval, "FROZEN_EVALUATION_RULES", "0" * 64)
         world = World(tmp_path, passing_script())
-        with pytest.raises(EvaluationError, match=r"changed since: the gazetteer, the labelling rules[.]"):
+        with pytest.raises(EvaluationError, match=r"changed since: the gazetteer, docs/evaluation.md[.]"):
             await world.evaluate(models=[MODEL], runs=1, for_report=True)
 
     async def test_another_ollama_version_is_named_on_the_screen(self, tmp_path: Path) -> None:

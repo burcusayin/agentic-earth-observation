@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,14 @@ from agentic_earth_observation.evals.golden import (
     load_golden,
     load_tasks,
 )
+from agentic_earth_observation.evals.groups import added_in_v2, relative_period
 from agentic_earth_observation.evals.run_eval import (
     FROZEN_EVALUATION_CODE,
     FROZEN_EVALUATION_RULES,
     FROZEN_GAZETTEER,
     FROZEN_TEST_SPLIT,
+    FROZEN_TEST_SPLIT_V1,
+    TEST_TASKS_V1,
 )
 
 
@@ -134,7 +138,7 @@ def test_finds_duplicate_ids(gazetteer: Gazetteer) -> None:
 def test_the_committed_golden_set_is_valid_and_complete() -> None:
     tasks = load_golden()
     assert sum(t.split == "dev" for t in tasks) == 4
-    assert sum(t.split == "test" for t in tasks) == 18
+    assert sum(t.split == "test" for t in tasks) == 50
 
 
 def test_dev_and_test_use_different_places() -> None:
@@ -155,7 +159,7 @@ def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
     # A fix to any of them needs a dated decision and a new tag, and then new values in run_eval.py. The
     # literal digests here are the ones taken at the tag; the constants must stay equal to them. The dev split
     # is not frozen, so the hash over both splits is pinned here only to show when it last changed.
-    assert golden_hash() == "743d5e2abb5db223099b2b6f37c73fbdc503b80c745d4a456e999003b5ed9bc7"
+    assert golden_hash() == "fe7aa7979bcdd77ecdfe1ee40dc34ae9304dd949048c26d577df8658baa7907b"
     assert (
         evaluation_code_hash()
         == FROZEN_EVALUATION_CODE
@@ -165,7 +169,7 @@ def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
         (
             "docs/evaluation.md",
             FROZEN_EVALUATION_RULES,
-            "9f3ae9ba0643eebc8082a4b6dc549224fc5674a85af3fa8d75f18ca3f10abb5b",
+            "98cd80541fcd11e77834a9bda3edd4868af3a2c747df11996d3d4a33112dc467",
         ),
         (
             "data/gazetteer.json",
@@ -175,10 +179,45 @@ def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
         (
             "data/golden/test.jsonl",
             FROZEN_TEST_SPLIT,
-            "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784",
+            "7f4847562d2e6c43f91b74945201d3cc03cb99091fdcb923764060a41582ea6c",
         ),
     ):
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == constant == frozen, path
+
+
+def test_the_test_split_of_v2_begins_with_that_of_v1_unchanged() -> None:
+    # The results of v1.0 are on these 18 tasks, and a comparison with them needs the very same ones.
+    lines = (ROOT / "data/golden/test.jsonl").read_bytes().splitlines(keepends=True)
+    first = hashlib.sha256(b"".join(lines[:TEST_TASKS_V1])).hexdigest()
+    assert first == FROZEN_TEST_SPLIT_V1 == "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784"
+    assert len(lines) == 50
+
+
+def test_the_ids_of_the_test_split_tell_the_tasks_of_v1_from_those_added_in_v2() -> None:
+    # A report groups the tasks by their ids (evals/groups.py), since a task has no field for it.
+    test = [task for task in load_golden() if task.split == "test"]
+    assert [added_in_v2(task.id) for task in test] == [False] * TEST_TASKS_V1 + [True] * 32
+    periods = Counter(period for task in test if (period := relative_period(task.id)) is not None)
+    assert periods == {
+        "last-month": 2,
+        "last-spring": 1,
+        "last-summer": 1,
+        "last-autumn": 2,
+        "last-winter": 2,
+    }
+    assert not any(added_in_v2(task.id) for task in load_golden() if task.split == "dev")
+
+
+def test_the_labelling_rules_and_the_scoring_are_those_of_v1_word_for_word() -> None:
+    # docs/evaluation.md gained the tasks of v2 and the rules for comparing setups. What decides an expected
+    # answer and a score did not change: this is the digest of that part of the file at tag golden-test-v1.
+    text = (ROOT / "docs/evaluation.md").read_text(encoding="utf-8")
+    part = text[text.index("## Labelling rules") : text.index("## Runs and statistics")]
+    assert "## Task format" in part
+    assert "## Scoring" in part
+    assert hashlib.sha256(part.encode()).hexdigest() == (
+        "66524fdd71953d2e77a239dce5a29fca8ea119c20aea5cfc90a8480791c67f62"
+    )
 
 
 def test_the_evaluation_code_hash_is_stable_and_well_formed() -> None:

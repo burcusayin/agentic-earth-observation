@@ -2,10 +2,13 @@
 
 Two local models, each run three times over the 18 tasks of the frozen test split. Every result here comes from
 the run records in [`results/runs/`](../results/runs/), and the report made from them is
-[`results/summary.md`](../results/summary.md); the machine's details and the caching figures come from
-[`decisions.md`](decisions.md). The rules are in [`evaluation.md`](evaluation.md), frozen at tag
-`golden-test-v1` before any prompt was written; the decisions behind the runner and the report are in
-[`decisions.md`](decisions.md).
+[`results/summary-v1.0.md`](../results/summary-v1.0.md); the machine's details and the caching figures come from
+[`decisions.md`](decisions.md). The rules are in [`evaluation.md`](evaluation.md); its labelling rules and
+scoring were frozen at tag `golden-test-v1` before any prompt was written, and have not changed since. The
+decisions behind the runner and the report are in [`decisions.md`](decisions.md).
+
+Since these results, the test split has grown to 50 tasks (tag `golden-test-v2`): the same 18, unchanged, and 32
+new ones. Nothing on this page changes with that; "the test split" here means the 18 tasks of `golden-test-v1`.
 
 ## What was run
 
@@ -110,9 +113,16 @@ The six declines on search turns of ministral-3:8b are the first two of these th
 
 ## Checking these numbers
 
+The report counts runs on the current test split, and these runs are on the 18 tasks of v1. So it is made
+again from the release they belong to, in a second working tree:
+
 ```bash
-make report    # remakes results/summary.md from results/runs/
+git worktree add ../eo-agent-v1.0.1 v1.0.1 && cd ../eo-agent-v1.0.1
+make report           # remakes results/summary.md from results/runs/
+git status --short    # empty: it is the file committed at v1.0.1
 ```
+
+That file is kept here as `results/summary-v1.0.md`.
 
 Each run's folder holds `run.json` (the commit, the model build, the hashes of the prompts and of the frozen
 files, the settings), `attempts.jsonl` (every attempt with its turns, their scores and their tool calls) and

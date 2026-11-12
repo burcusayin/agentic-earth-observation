@@ -17,7 +17,7 @@ the Model Context Protocol (MCP), agent-to-agent delegation (A2A), and the evalu
 | STAC catalogue client (Earth Search) | `src/agentic_earth_observation/catalog/stac.py` | Done |
 | Gazetteer: place names to boxes, from OpenStreetMap | `src/agentic_earth_observation/catalog/gazetteer.py` | Done |
 | MCP server with four tools | `src/agentic_earth_observation/catalog_mcp/server.py` | Done |
-| Golden set (22 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v1` |
+| Golden set (54 tasks) and turn scoring | `data/golden/`, `src/agentic_earth_observation/evals/` | Done; test split frozen at tag `golden-test-v2` (50 tasks; the 18 of `golden-test-v1` and 32 added) |
 | Retrieval agent (LangGraph), served over A2A | `src/agentic_earth_observation/retrieval_agent/` | Done |
 | Orchestrator (LangGraph), an A2A client, and `eo-agent chat` | `src/agentic_earth_observation/orchestrator/`, `src/agentic_earth_observation/cli.py` | Done |
 | Evaluation runner, and `eo-agent eval` | `src/agentic_earth_observation/evals/run_eval.py` | Done |
@@ -42,7 +42,8 @@ scene metadata is used; no imagery is downloaded. Everything listens on `127.0.0
 
 ## Evaluation
 
-The golden set has 22 tasks: 4 for development and 18 for testing.
+The golden set has 54 tasks: 4 for development and 50 for testing (18 until tag `golden-test-v2`; the results
+below are on those 18).
 - **Categories:** single searches, follow-up questions, typos and other languages, relative dates, out-of-scope
   requests including a prompt injection, unknown or misspelt places, radar with a cloud limit, dates before a
   satellite launched, and a search with no results.
@@ -50,6 +51,11 @@ The golden set has 22 tasks: 4 for development and 18 for testing.
   `golden-test-v1`) before any agent prompt was written. A test checks that the code the agents run, the text
   they read and the scripts do not mention test-split places, questions or dates; what it cannot see is recorded in
   [docs/decisions.md](docs/decisions.md) (2026-11-07).
+- **Grown before the first improvement:** after the results below, the test split grew from 18 to 50 tasks and
+  was frozen again (git tag `golden-test-v2`), with the rules and the scoring unchanged, so that a change to the
+  system is measured on tasks that had not been run when it was chosen. The new tasks were written and checked
+  by separate sessions of an AI coding assistant and have not been read by a person
+  ([docs/decisions.md](docs/decisions.md), 2026-11-12). No run on the 50 tasks exists yet.
 - **Tuned on dev only:** a prompt change is kept only if it raises pass rates on dev and synthetic cases
   (`scripts/probe_models.py`, repeated runs on both local models) and lowers none. The numbers are in
   [docs/decisions.md](docs/decisions.md).
@@ -77,7 +83,7 @@ Both local models, three runs each over the 18 test tasks (2026-11-08, from a cl
 The models differ on 4 tasks (3 passed by qwen3.5:9b only, 1 by ministral-3:8b only; exact sign test p = 0.63):
 with 18 tasks, the difference does not show that either is better. The task-by-task analysis and the limitations,
 among them timings taken on a fanless laptop, are in [docs/results.md](docs/results.md); the full report is
-[results/summary.md](results/summary.md), and every run's records are in `results/runs/`.
+[results/summary-v1.0.md](results/summary-v1.0.md), and every run's records are in `results/runs/`.
 
 The details are in [docs/evaluation.md](docs/evaluation.md), and the design decisions with their reasons in
 [docs/decisions.md](docs/decisions.md).
@@ -119,6 +125,8 @@ test split runs only with `--for-report`, from a clean checkout, because every r
 markdown: every run with why it counts or not, then for each model the passed tasks with 95% intervals (lost
 tasks left out, and counted as failed), the comparison of the models, and the secondary measures. It prints task
 ids, never a task's text. `make report` writes the report on the test split's runs to `results/summary.md`.
+It counts the runs on the current test split only. The runs of v1.0 are on the 18 tasks of `golden-test-v1`, so
+their report is kept as `results/summary-v1.0.md`; `make report` at tag `v1.0.1` makes it again.
 
 In the chat, each line continues the conversation: a follow-up such as "and the week after that?" continues
 the last search, and an answer to the assistant's own question (which place? which dates? did you mean …?)
@@ -178,7 +186,7 @@ Bug reports and fixes are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md) and 
   - Two Mistral API models next to the local ones, with cost per task.
   - A recorded local catalogue for fully offline runs.
   - Fault injection (timeouts, server errors, rate limits).
-  - About 50 tasks.
+  - About 50 tasks: done, 50 tasks frozen at tag `golden-test-v2`; no run on them yet.
   - Determinism statistics and an accuracy-versus-cost chart.
   - One targeted improvement, measured before and after.
 - **Breadth and polish:**

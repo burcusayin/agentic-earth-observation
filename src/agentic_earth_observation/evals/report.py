@@ -67,7 +67,8 @@ RunState = Literal[
 ]
 COUNTED: tuple[Result, ...] = ("passed", "failed", "errored", "lost")  # the order counts are written in
 RUNS_PER_MODEL = 3  # docs/evaluation.md: "Every model runs every task 3 times"
-TEST_SPLIT_TASKS = 18  # the frozen split the noise figures of docs/evaluation.md are for
+# The frozen test split (golden-test-v2), which the noise figure quoted from docs/evaluation.md is for.
+TEST_SPLIT_TASKS = 50
 
 
 class ReportError(Exception):
@@ -181,7 +182,7 @@ def _other_frozen_files(record: RunRecord, golden: str) -> list[str]:
         "the golden set": (record.hashes.golden, golden),
         "the evaluation code": (record.hashes.evaluation_code, FROZEN_EVALUATION_CODE),
         "the gazetteer": (record.hashes.gazetteer, FROZEN_GAZETTEER),
-        "the labelling rules": (record.hashes.evaluation_rules, FROZEN_EVALUATION_RULES),
+        "docs/evaluation.md": (record.hashes.evaluation_rules, FROZEN_EVALUATION_RULES),
     }
     return [name for name, (used, read) in expected.items() if used != read]
 
@@ -763,7 +764,7 @@ def render_markdown(report: Report) -> str:
             f"{len(report.listed)} listed, {on}.",
             f"Reference date {first.reference_date}. Frozen files: golden set {first.hashes.golden[:12]}, "
             f"evaluation code {first.hashes.evaluation_code[:12]}, gazetteer {first.hashes.gazetteer[:12]}, "
-            f"labelling rules {first.hashes.evaluation_rules[:12]}.",
+            f"docs/evaluation.md {first.hashes.evaluation_rules[:12]}.",
             "",
         ]
     else:
@@ -828,7 +829,7 @@ def _headline_table(models: Sequence[ModelSummary]) -> list[str]:
 
 def _comparison_table(comparisons: Sequence[Comparison], tasks: int) -> list[str]:
     noise = (
-        "differences of less than about 25 to 35 points (5 or 6 tasks) can be noise (docs/evaluation.md)"
+        "differences of less than about 16 to 20 points (8 to 10 tasks) can be noise (docs/evaluation.md)"
         if tasks == TEST_SPLIT_TASKS
         else f"with {_count(tasks, 'task')} the intervals are wide, so read any difference with care"
     )

@@ -19,8 +19,9 @@ Tests make no network or model calls by default. Tests marked `integration` need
 
 The evaluation's numbers mean something only if these stay fixed:
 
-- **Frozen at tag `golden-test-v1`:** `data/golden/test.jsonl`, `data/gazetteer.json`, the labelling rules and
-  scoring in `docs/evaluation.md`, `evals/golden.py` and `evals/scoring.py`. A test compares them with their hashes.
+- **Frozen at tag `golden-test-v2`:** `data/golden/test.jsonl`, `data/gazetteer.json`, the labelling rules,
+  scoring and comparison rules in `docs/evaluation.md`, `evals/golden.py` and `evals/scoring.py`. A test compares
+  them with their hashes. All but the test split and the comparison rules are as they were at `golden-test-v1`.
   A real fix needs a dated entry in `docs/decisions.md` and a new tag.
 - **No tuning on the test split.** Prompts and tool descriptions are tuned on the dev split only, and must not use
   the test split's places, dates or wording. `tests/test_no_leakage.py` checks part of this.

@@ -90,16 +90,22 @@ MODELS_UNDER_EVALUATION = ("qwen3.5:9b", "ministral-3:8b")  # fixed: another mod
 ERRORED_LIMIT = 3  # the run aborts at the third errored task: by then the system is broken, not a task
 LOST_LIMIT = 3  # the run aborts at the third task lost to the infrastructure: too little would be measured
 RETRY_PAUSE_S = 30.0  # before a task is tried again, so that a short outage does not take all its attempts
-# docs/evaluation.md: every expected search returned scenes when checked, except the one "no results" task.
+# docs/evaluation.md: every expected search returned scenes when checked, except the one "no results" task of
+# v1; the tasks added in v2 have none (evals/candidates.py refuses a new task whose search found nothing).
 # More than this means the catalogue or the client changed, and every search would score as "none found".
 EMPTY_SEARCH_TASKS = 1
-# The frozen files at tag golden-test-v1 (docs/evaluation.md, "What is frozen"; tests/test_golden.py checks
+# The frozen files at tag golden-test-v2 (docs/evaluation.md, "What is frozen"; tests/test_golden.py checks
 # them too). A fix to one needs a dated decision and a new tag, and then its constant. The dev split is not
-# frozen: the record's golden hash covers both splits, the check here only the test split.
-FROZEN_TEST_SPLIT = "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784"
+# frozen: the record's golden hash covers both splits, the check here only the test split. The test split of
+# v2 begins with that of v1, whose hash stays here to show it (decision of 2026-11-12); the evaluation code
+# and the gazetteer are those of v1.
+FROZEN_TAG = "golden-test-v2"
+FROZEN_TEST_SPLIT = "7f4847562d2e6c43f91b74945201d3cc03cb99091fdcb923764060a41582ea6c"
+FROZEN_TEST_SPLIT_V1 = "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784"
+TEST_TASKS_V1 = 18  # the first lines of the test split, which FROZEN_TEST_SPLIT_V1 is the hash of
 FROZEN_EVALUATION_CODE = "72d140b004d9a42eaa017ea53db68334407cea46a82b5d4b871ff45d94c3b9cb"
 FROZEN_GAZETTEER = "af181e26cb48c0631f8e3e70bbe71aa7ef2e12d59b1bae0f1b141d76f842d91e"
-FROZEN_EVALUATION_RULES = "9f3ae9ba0643eebc8082a4b6dc549224fc5674a85af3fa8d75f18ca3f10abb5b"
+FROZEN_EVALUATION_RULES = "98cd80541fcd11e77834a9bda3edd4868af3a2c747df11996d3d4a33112dc467"
 DEFAULT_RUNS = 3
 DEFAULT_SHUFFLE_SEED = 1  # one order for every run of every model
 ORACLE_LIMIT = 50  # the oracle query's limit when the task asks for no number of scenes
@@ -298,11 +304,11 @@ def _ready_for_the_report(services: Services) -> None:
         "the test split": (file_hash(services.golden_dir / "test.jsonl"), FROZEN_TEST_SPLIT),
         "the evaluation code": (evaluation_code_hash(), FROZEN_EVALUATION_CODE),
         "the gazetteer": (file_hash(GAZETTEER_PATH), FROZEN_GAZETTEER),
-        "the labelling rules": (file_hash(EVALUATION_RULES), FROZEN_EVALUATION_RULES),
+        "docs/evaluation.md": (file_hash(EVALUATION_RULES), FROZEN_EVALUATION_RULES),
     }
     if changed := [name for name, (now, then) in frozen.items() if now != then]:
         raise EvaluationError(
-            f"frozen at tag golden-test-v1 and changed since: {', '.join(changed)}. A fix to a frozen file "
+            f"frozen at tag {FROZEN_TAG} and changed since: {', '.join(changed)}. A fix to a frozen file "
             "needs a dated decision and a new tag"
         )
 
@@ -589,21 +595,35 @@ def _notice_an_empty_catalogue(oracle: OracleCheck, task: Task, run: _Running) -
         )
 
 
-async def _oracle(search: ExpectedSearch, output: TurnOutput, catalog: Catalog, plan: Plan) -> OracleCheck:
-    """The direct catalogue query of a turn that expects a search (docs/evaluation.md, Reported alongside)."""
-    place = plan.gazetteer.resolve(search.place)
-    if place is None:  # load_golden checked every expected place against the gazetteer
-        raise Aborted(f"a bug in the runner: the expected place {search.place!r} is not in the gazetteer")
-    limit = search.limit or ORACLE_LIMIT
-    request = SearchRequest.model_validate(
+class UnknownPlace(LookupError):
+    """An expected search names a place the gazetteer does not have."""
+
+
+def oracle_request(search: ExpectedSearch, gazetteer: Gazetteer) -> SearchRequest:
+    """The direct catalogue query for an expected search (docs/evaluation.md, Reported alongside): the
+    place's box, the top of the accepted cloud range, and the expected limit, or ORACLE_LIMIT when the task
+    asks for no number of scenes. LookupError for a place the gazetteer does not have."""
+    place = gazetteer.resolve(search.place)
+    if place is None:
+        raise UnknownPlace(f"the expected place {search.place!r} is not in the gazetteer")
+    return SearchRequest.model_validate(
         {
             "product": search.product,
             "bbox": place.bbox,
             "dates": {"start": search.start, "end": search.end},
             "max_cloud_cover": None if search.cloud is None else search.cloud[1],
-            "limit": limit,
+            "limit": search.limit or ORACLE_LIMIT,
         }
     )
+
+
+async def _oracle(search: ExpectedSearch, output: TurnOutput, catalog: Catalog, plan: Plan) -> OracleCheck:
+    """The direct catalogue query of a turn that expects a search (docs/evaluation.md, Reported alongside)."""
+    try:
+        request = oracle_request(search, plan.gazetteer)
+    except UnknownPlace as err:  # load_golden checked every expected place against the gazetteer
+        raise Aborted(f"a bug in the runner: {err}") from err
+    limit = request.limit
     try:
         async with asyncio.timeout(plan.settings.stac_deadline_s):
             scenes = await asyncio.to_thread(catalog.search, request)

@@ -8,8 +8,9 @@ A multi-agent Earth Observation assistant and an evaluation of its tool use. A L
 scene searches over A2A to a retrieval agent, which calls an MCP server wrapping a public STAC catalogue
 (scene metadata only, no imagery). The main deliverable is the evaluation, not the chat interface.
 
-- Scope is **Milestone 1** in the README roadmap. Work on follow-up items (recorded catalogue, fault injection,
-  CDSE, Phoenix, skills, demo mode) only when asked.
+- **Milestone 1** of the README roadmap is released (`v1.0.1`). Work on a follow-up item (recorded catalogue,
+  fault injection, CDSE, Phoenix, skills, demo mode) only when asked. Asked for since 2026-11-12: the larger test
+  split and one measured improvement (`docs/decisions.md`, entry of that date).
 - `docs/decisions.md`: dated technical decisions with their reasons.
   - Read it before proposing a change of scope or design.
   - Add a dated entry when a decision is made or reversed.
@@ -30,8 +31,10 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
     writes down: the run record and the attempt records), `outcome.py` (what a turn counts as: scored,
     infrastructure or errored), `servers.py` (the run's MCP server and retrieval agent as child processes),
     `model_server.py` (Ollama: which build runs, and that it alone is loaded), `run_eval.py` (the run loop,
-    `eo-agent eval`), `stats.py` (bootstrap intervals, the exact sign test) and `report.py` (which runs count,
-    the numbers and the markdown, `eo-agent report`).
+    `eo-agent eval`), `stats.py` (bootstrap intervals, the exact sign test), `report.py` (which runs count,
+    the numbers and the markdown, `eo-agent report`), `groups.py` (which test tasks were added in v2, and the
+    relative period of a task, read from its id) and `candidates.py` (the checks on new test tasks before they
+    join the split; it prints totals only).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded
   catalogue responses. `docs/evaluation.md`: the golden set's labelling rules and the scoring.
 
@@ -88,15 +91,19 @@ make report    # the report on the test split's runs, written to results/summary
 
 ## Evaluation integrity
 
-- **What is frozen:** from tag `golden-test-v1` onwards, the golden test split, `data/gazetteer.json`, the
-  labelling rules and scoring in `docs/evaluation.md`, and the evaluation code (`evals/golden.py`,
-  `evals/scoring.py`, including the reference date and thresholds).
+- **What is frozen:** from tag `golden-test-v2` onwards, the golden test split (50 tasks: the 18 of
+  `golden-test-v1` and 32 added), `data/gazetteer.json`, the labelling rules, scoring and comparison rules in
+  `docs/evaluation.md`, and the evaluation code (`evals/golden.py`, `evals/scoring.py`, including the reference
+  date and thresholds).
   - Before the tag, ask before editing them. After it, never edit them.
   - A fix needs a dated decision and a new tag.
 - **No leakage:** never use the test split's places, dates or wording in prompts, tool descriptions or few-shot
   examples. Tune on the dev split only.
-- **Prompts are frozen for v1.0:** test-split results were seen on 2026-11-08, so prompts and tool descriptions
-  stay as they are until v1.0 is tagged. A change after it is measured again, on new runs, and reported as such.
+- **Prompts changed only as a measured change:** v1.0 is tagged with the prompts its results were made with. A
+  change to a prompt or a tool description follows what `docs/decisions.md` registers (2026-11-12): finished
+  before the first run on the 50 tasks, measured before and after on new runs, and reported as such.
+- **The new test tasks are never read by a session that writes prompts or an improvement.** Check them only with
+  `evals/candidates.py`, and keep `data/golden/test.jsonl` out of every diff and printout.
 - **The models under evaluation are fixed.** Add or swap one only after a dated entry in `docs/decisions.md`.
 - **Local models (Ollama):** always set `num_ctx`, `temperature` and `seed` explicitly; the default context
   truncates silently. The values are in `docs/decisions.md`.

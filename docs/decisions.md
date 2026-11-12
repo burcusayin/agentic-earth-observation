@@ -655,3 +655,182 @@ findings are folded in below. Where the frozen text leaves a choice open, these 
   development tools) and virtualenv 21.14.6 to 21.15.6 (development tools only). Each is at or above its fixed
   version, and nothing else in the lock moved. The test runs were made with the old versions, which their records
   name; no result depends on these packages, and Earth Search answers over HTTPS with the new certificate bundle.
+
+## 2026-11-12
+The follow-up milestones start with the evaluation: a larger test split first, then one targeted improvement
+measured on it. What was decided before any of it was written, after a separate read-only session had reviewed the
+plan, and, in the bullets that say so, what was done since:
+
+- **A second version of the golden set, tag `golden-test-v2`, before the first improvement.** The error analysis of
+  v1.0 points at a fix (`docs/results.md`: a relative date resolved a year early). But a fix chosen from 18 tasks
+  and measured again on the same 18 shows little: the task that suggested it is the task it is scored on, and one
+  task at most can change. So the test split grows first, to the 18 tasks of v1, unchanged, followed by 32 new ones,
+  and is frozen again before the improvement is built.
+- **The mix of the new tasks:**
+
+  | Category | v1 | Added | v2 |
+  |---|---|---|---|
+  | `single_search` | 5 | 4 | 9 |
+  | `follow_up` | 2 | 5 | 7 |
+  | `robustness` | 3 | 13 | 16 |
+  | `out_of_scope` | 2 | 3 | 5 |
+  | `clarify` | 3 | 4 | 7 |
+  | `edge` | 3 | 3 | 6 |
+  | Total | 18 | 32 | 50 |
+
+  - Of the 13 robustness tasks, 8 ask for a relative date, each of the five periods of the labelling rules at
+    least once, 3 are in other languages and 2 have typos in the wording. No second task without results is added.
+  - The mix leans on the kinds of task that v1.0 failed. The pass rate on the 50 tasks is therefore not comparable
+    with v1.0's on 18, and says nothing about typical requests.
+  - The gazetteer does not change, and its ten places are all in use (two in the dev split, eight in the test
+    split), so every expected search of the new tasks is over one of the eight places of the test split again.
+- **No new labelling rule.** A task that would need a rule `docs/evaluation.md` does not state is left out, so that
+  the prompts of v1.0 are measured on rules they were told (2026-11-02).
+- **Who writes and checks the new tasks.** The session that writes prompts and the improvement reads neither the
+  test split nor the candidates: the commands that check them (`evals/candidates.py`) print totals only, on both
+  output streams, and write what they find to a file. The tasks were the work of separate sessions of the same
+  assistant, each with a written brief and none with another's memory:
+  1. One wrote the 32 tasks from the labelling rules and the v1 split, and checked every expected search against
+     the catalogue.
+  2. One labelled them a second time from the questions. It read the rules and the existing splits, as the first
+     did, and not the first session's answers.
+  3. Two reviewed the tasks to find fault with them, independently: one went through the tasks with the rules open,
+     the other read only the questions first and wrote down every way to read each before it saw an expected
+     answer.
+  4. One checked each finding, changed the tasks where a finding held, and asked the catalogue again for the
+     searches it had changed.
+  5. One labelled the final questions again, and one reviewed the changed tasks.
+  - **The maintainer did not read the new tasks.** The plan was that the maintainer would decide every
+    disagreement and read every task. There was no time for it, and steps 3 to 5 took its place. No person has
+    checked the 32 new tasks; all their checks are by sessions of one model family, which can share a blind spot.
+  - **What the checks found.** Both second labellings agreed with the tasks on 32 of 32. The two reviewers raised
+    four findings, none of them a wrong, ambiguous or unscorable expected answer: two against the brief's
+    requirements, one weak task, one note. Three were accepted and one was the same as another. Four tasks changed:
+    three were reworded, their expected searches with them, and one had its note corrected. The review of those
+    four raised no finding.
+  - That last reviewer also left five observations it did not count as findings. Another session weighed each
+    of them against the rules, and kept four as they were. The fifth it judged a weak task: the expected answer
+    is the only one the rules allow and the scoring is right for every behaviour, but the question's wording
+    added a way to fail that has nothing to do with what the task measures. Only that question was reworded,
+    after the tasks had been appended and before the tag; its id, expected answer and notes did not change. It
+    was labelled once more from the rewording alone, and the label agreed.
+  - This separation is by procedure. On one machine with one maintainer nothing enforces it; what the record can
+    show is the order: the tag, the improvement's commit, the start of the runs. That each session read and ran
+    only what its brief allowed was checked afterwards from the record of its tool calls, with scripts that print
+    file paths and counts; that record is not in the repository.
+  - Publishing only a hash of the new tasks until the improvement is finished was considered and not adopted: with
+    the tasks on the same machine either way, it would show no more than that order.
+- **The ids of the new tasks carry their groups** (`evals/groups.py`): they start with `v2-`, and a relative-date
+  task is `v2-relative-<period>-…`, the period one of `last-month`, `last-spring`, `last-summer`, `last-autumn`
+  and `last-winter`. A report can then tell the tasks seen in v1.0 from the new ones, and group the relative-date
+  tasks by period, although a task has no field for either and `golden.py` is frozen.
+- **The dev split does not change.** A run record's golden hash covers both splits, so a change to the dev split
+  between two sets of runs would make the earlier ones another golden set; and the runner's tests are written for
+  its four tasks. New dev material goes into the probe (`scripts/probe_models.py`).
+- **Relative dates are probed under other dates than the reference date.** At the reference date the five periods
+  have five answers, the same for a place of the dev split as for one of the test split. A probe case there would
+  be the test's answer with the place swapped, and its dates would be test-split dates in a script the leakage test
+  scans.
+- **Registered before any run on the v2 test split:**
+  - **Target:** relative dates, if a local model fails a relative-date probe case in at least 3 of its 5 runs;
+    otherwise the next failure of v1.0 that shows on the dev split (ministral-3:8b does not delegate the dev
+    split's German question, 2026-11-03).
+  - **Order:** the improvement is finished on its branch before the first run on the v2 test split starts. Its
+    pull request changes nothing under `evals/`, `data/` or `docs/evaluation.md`.
+  - **Primary result:** qwen3.5:9b on the new relative-date tasks, before and after, each task by the majority of
+    its 3 runs, shown per period as counts. If the target is the other one, the primary result is ministral-3:8b
+    on the three new tasks in other languages, as counts; three tasks can show a direction and no more.
+  - **No significance is claimed for it.** Tasks that ask for the same period are not independent, and with five
+    periods an exact two-sided sign test cannot go below p = 0.0625 (it takes six that all change the same way for
+    0.031). The p-value is printed with that note. Rules for more periods would be a second round, measured again.
+  - **Secondary:** all 50 tasks before and after, with every task that changed listed; the 18 tasks of v1 apart
+    from the new ones, since the fix was chosen from them; ministral-3:8b the same way (it passed the relative-date
+    task of v1, so little change is expected there).
+  - **Session noise:** the 18 tasks of v1 in the runs of v1.0 and in the baseline on the v2 split, which use the
+    same prompts. A difference there is not the improvement's (2026-11-03: a run does not always repeat itself).
+  - **Runs:** the six runs of a phase come from one command at one commit, and a commit of run records touches
+    only `results/`. If an evaluation aborts, it is started again and every run is listed; all complete runs of a
+    setup count, and the report says how many there are.
+  - **One round:** a change to the improvement after its first run on the v2 test split is a second round, and is
+    reported as one.
+- **The oracle's request is a function of its own** (`oracle_request` in `evals/run_eval.py`), so that the check of
+  new tasks against the catalogue asks exactly what a run will ask. The runner's behaviour is unchanged.
+- **How two setups of one model are compared.** A setup is a set of runs with the same code, prompts, tool
+  descriptions and model options. These rules go into `docs/evaluation.md` in the commit that freezes it again, so
+  that the text and its hash change together:
+
+  | | Rule |
+  |---|---|
+  | A task's result | The majority of the model's 3 runs in a setup. A task without a majority is left out, and counted as left out. This is the rule already used between two models. |
+  | Before and after | For one model: the tasks passed in both setups, failed in both, gained, lost and left out. Every gained or lost task is listed by id. An exact two-sided sign test on gained against lost. |
+  | Seen and new | The same three times: on all 50 tasks, on the 18 of v1, and on the 32 added in v2. |
+  | Relative dates | For the new relative-date tasks, the tasks passed per period, before and after. A period passes when all its tasks pass. The sign test is over the five periods and is printed with the note that it cannot go below 0.0625. |
+  | Session noise | The 18 tasks of v1 in the runs of v1.0 against the baseline on the v2 split. |
+  | Determinism | Over the turns that every run of a model reached: the share where all runs made the same tool calls (names, arguments, order), and the share where they also cited the same scenes. Within a setup, and between the two setups of the session-noise comparison. |
+  | Noise with 50 tasks | One task is 2 points. A single model's interval is about ±11 to ±14 points. A difference between two different models of less than about 16 to 20 points (8 to 10 tasks) can be noise. |
+
+  - The noise figures are the normal approximation of a 95% interval, 1.96 · sqrt(p(1 − p)/n), and sqrt(2) times
+    it for the difference between two models, at pass rates p of 0.5, 0.75 and 0.8. For n = 50 that is ±13.9,
+    ±12.0 and ±11.1 points for one model, and 19.6, 17.0 and 15.7 points between two.
+  - `docs/evaluation.md` does not say how its figures for 18 tasks were made (±20 points; 25 to 35 points, 5 or 6
+    tasks). The same calculation gives ±20.0 points at p = 0.75, and 26 to 33 points (4.7 to 5.9 tasks) between
+    two models, so it agrees with them; it is a reconstruction, not the original working.
+  - These figures take the tasks to be independent. The new relative-date tasks that share a period are not, so the
+    real intervals are somewhat wider. The mix leans on what v1.0 failed, so a pass rate nearer 0.5 than 0.8, and
+    the wider figure, is the likelier case.
+  - The figure for two models does not apply to one model before and after a change. Those results are paired,
+    task by task, and are judged by the tasks that changed (the sign test of the second row).
+- **The checker resolves the five periods itself** (`period_dates` in `evals/candidates.py`). A relative-date task
+  must expect a search over exactly the dates that the period in its id means on the reference date. Two
+  labellings can make the same slip in a date; this check cannot. It is a second reading of two labelling rules, in
+  a file that is not frozen and that no model reads, and the rules stay those of `docs/evaluation.md`. "Complete"
+  is read as: the season's last day is before today.
+- **What the writing session was told beyond the mix:**
+  - Relative-date tasks are in English, have one turn and name the period in the rules' own words, so that a
+    failure is about the date and nothing else.
+  - Every expected search must find scenes. The runner allows one task whose search finds nothing
+    (`EMPTY_SEARCH_TASKS`), and v1 has it.
+  - A place name, as a question writes it, must resolve in the gazetteer where a search is expected, and must not
+    where a clarification is.
+  - It does not read the prompts, the probe script or the results: the tasks come from the rules and from what a
+    user might ask.
+  - The check against the catalogue is made with `candidates live` only, within 60 requests. It was run three
+    times: on the 29 expected searches of the first draft, on those of 2 tasks that the writing session replaced
+    after reading its draft once more as a reviewer, and on 4
+    that changed after the review. Every search found scenes. Counted from outside, that is 35 searches and one
+    request per run to open the catalogue. In those runs the client could still repeat a failed request up to
+    three times without showing it; since then the command asks without retries, stops at the first search that
+    fails, and writes each answer down as it comes.
+  - Before the tasks join the split, the scan of `tests/test_no_leakage.py` is run on them (a local script calls
+    the test's own functions with the candidates added in memory). A term that system code already contains is
+    then found while the task can still be reworded.
+- **What `candidates check` refuses**, beyond the golden set's own checks: an id that does not start with `v2-` or
+  is taken; a question that an existing task or another candidate asks; a relative-date id whose question does not
+  name its period in the rules' words, or whose dates are not that period's; any other task that names such a
+  period; a place of the dev split; an expected search whose place no question names in a way the gazetteer
+  resolves; and notes that do not give the live check's date and a count of at least one scene for every expected
+  search. It cannot judge whether an expected answer is right: that rests on the sessions above.
+- **A second labelling is matched to its task by a key made of the task's questions,** and the questions are handed
+  over in the order of their keys. Labels made for a question that was later reworded then count for no task
+  instead of agreeing by their place in the file, and the place of a question does not give away its category.
+- **What nothing in the repository shows:** that the writing and reviewing sessions did not read the prompts,
+  the probe script or the results (checked from the record of their tool calls, which is not published); that the
+  three questions in other languages and the two with typos are what they are meant to be (the reviewing sessions
+  were asked to check it); and that the plan was reviewed by a read-only session.
+- **The freeze at tag `golden-test-v2`.**
+  - `data/golden/test.jsonl` is the 18 tasks of v1 followed by the 32 new ones. A test checks that its first 18
+    lines still have the hash of `golden-test-v1`, and that the ids tell the two groups and the five periods apart.
+  - `docs/evaluation.md` gained the counts and the live-check date of the new tasks, who wrote and checked them,
+    the noise figures for 50 tasks, and the section "Comparing two setups". Its labelling rules, task format and
+    scoring are word for word those of the first tag; a test pins the digest of that part.
+  - `evals/golden.py`, `evals/scoring.py`, `data/gazetteer.json` and the dev split are unchanged since the first
+    tag.
+  - The report of v1.0 is kept as `results/summary-v1.0.md`. The report counts only runs on the current test
+    split, so at this commit it counts none and lists the six runs of v1.0 as runs on another golden set; from a
+    checkout of tag `v1.0.1`, `make report` makes that file again, byte for byte.
+  - A run record's `evaluation_rules` hash is of the whole of `docs/evaluation.md`. It therefore differs between
+    the runs of v1.0 and runs at this tag, although the labelling rules and the scoring do not. The runner and the
+    report now name that hash `docs/evaluation.md`, where they said "the labelling rules".
+- **Not yet in the code.** The report compares nothing between setups yet, uses none of the id groups, and counts
+  only runs of the current golden set, so the session-noise comparison with the runs of v1.0 needs it changed. That
+  is the next part of the work.
