@@ -659,7 +659,7 @@ findings are folded in below. Where the frozen text leaves a choice open, these 
 ## 2026-11-12
 The follow-up milestones start with the evaluation: a larger test split first, then one targeted improvement
 measured on it. What was decided before any of it was written, after a separate read-only session had reviewed the
-plan:
+plan, and, in the bullets that say so, what was done since:
 
 - **A second version of the golden set, tag `golden-test-v2`, before the first improvement.** The error analysis of
   v1.0 points at a fix (`docs/results.md`: a relative date resolved a year early). But a fix chosen from 18 tasks
@@ -683,7 +683,7 @@ plan:
   - The mix leans on the kinds of task that v1.0 failed. The pass rate on the 50 tasks is therefore not comparable
     with v1.0's on 18, and says nothing about typical requests.
   - The gazetteer does not change, and its ten places are all in use (two in the dev split, eight in the test
-    split), so the new tasks ask about the eight places of the test split again.
+    split), so every expected search of the new tasks is over one of the eight places of the test split again.
 - **No new labelling rule.** A task that would need a rule `docs/evaluation.md` does not state is left out, so that
   the prompts of v1.0 are measured on rules they were told (2026-11-02).
 - **Who writes and checks the new tasks.** The session that writes prompts and the improvement reads neither the
@@ -789,7 +789,8 @@ plan:
   - It does not read the prompts, the probe script or the results: the tasks come from the rules and from what a
     user might ask.
   - The check against the catalogue is made with `candidates live` only, within 60 requests. It was run three
-    times: on the 29 expected searches of the first draft, on 2 that the writing session then corrected, and on 4
+    times: on the 29 expected searches of the first draft, on those of 2 tasks that the writing session replaced
+    after reading its draft once more as a reviewer, and on 4
     that changed after the review. Every search found scenes. Counted from outside, that is 35 searches and one
     request per run to open the catalogue. In those runs the client could still repeat a failed request up to
     three times without showing it; since then the command asks without retries, stops at the first search that
@@ -806,9 +807,24 @@ plan:
 - **A second labelling is matched to its task by a key made of the task's questions,** and the questions are handed
   over in the order of their keys. Labels made for a question that was later reworded then count for no task
   instead of agreeing by their place in the file, and the place of a question does not give away its category.
-- **What rests on the briefs alone,** with nothing in the repository to show it: that the writing and reviewing
-  sessions did not read the prompts, the probe script or the results; that the three questions in other languages
-  and the two with typos are what they are meant to be; and that the plan was reviewed by a read-only session.
+- **What nothing in the repository shows:** that the writing and reviewing sessions did not read the prompts,
+  the probe script or the results (checked from the record of their tool calls, which is not published); that the
+  three questions in other languages and the two with typos are what they are meant to be (the reviewing sessions
+  were asked to check it); and that the plan was reviewed by a read-only session.
+- **The freeze at tag `golden-test-v2`.**
+  - `data/golden/test.jsonl` is the 18 tasks of v1 followed by the 32 new ones. A test checks that its first 18
+    lines still have the hash of `golden-test-v1`, and that the ids tell the two groups and the five periods apart.
+  - `docs/evaluation.md` gained the counts and the live-check date of the new tasks, who wrote and checked them,
+    the noise figures for 50 tasks, and the section "Comparing two setups". Its labelling rules, task format and
+    scoring are word for word those of the first tag; a test pins the digest of that part.
+  - `evals/golden.py`, `evals/scoring.py`, `data/gazetteer.json` and the dev split are unchanged since the first
+    tag.
+  - The report of v1.0 is kept as `results/summary-v1.0.md`. The report counts only runs on the current test
+    split, so at this commit it counts none and lists the six runs of v1.0 as runs on another golden set; from a
+    checkout of tag `v1.0.1`, `make report` makes that file again, byte for byte.
+  - A run record's `evaluation_rules` hash is of the whole of `docs/evaluation.md`. It therefore differs between
+    the runs of v1.0 and runs at this tag, although the labelling rules and the scoring do not. The runner and the
+    report now name that hash `docs/evaluation.md`, where they said "the labelling rules".
 - **Not yet in the code.** The report compares nothing between setups yet, uses none of the id groups, and counts
   only runs of the current golden set, so the session-noise comparison with the runs of v1.0 needs it changed. That
   is the next part of the work.

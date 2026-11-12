@@ -1481,7 +1481,7 @@ class TestEvaluate:
             ("FROZEN_TEST_SPLIT", "changed since: the test split[.]"),
             ("FROZEN_EVALUATION_CODE", "changed since: the evaluation code[.]"),
             ("FROZEN_GAZETTEER", "changed since: the gazetteer[.]"),
-            ("FROZEN_EVALUATION_RULES", "changed since: the labelling rules[.]"),
+            ("FROZEN_EVALUATION_RULES", "changed since: docs/evaluation.md[.]"),
         ],
     )
     async def test_a_run_for_the_report_needs_the_frozen_files_as_they_were_frozen(
@@ -1489,7 +1489,7 @@ class TestEvaluate:
     ) -> None:
         monkeypatch.setattr(run_eval, constant, "0" * 64)
         world = World(tmp_path, passing_script())
-        with pytest.raises(EvaluationError, match=rf"frozen at tag golden-test-v1 and {named}"):
+        with pytest.raises(EvaluationError, match=rf"frozen at tag golden-test-v2 and {named}"):
             await world.evaluate(models=[MODEL], runs=1, for_report=True)
         (scratch,) = await world.evaluate(models=[MODEL], runs=1)
         assert scratch.status == "complete"
@@ -1500,7 +1500,7 @@ class TestEvaluate:
         monkeypatch.setattr(run_eval, "FROZEN_GAZETTEER", "0" * 64)
         monkeypatch.setattr(run_eval, "FROZEN_EVALUATION_RULES", "0" * 64)
         world = World(tmp_path, passing_script())
-        with pytest.raises(EvaluationError, match=r"changed since: the gazetteer, the labelling rules[.]"):
+        with pytest.raises(EvaluationError, match=r"changed since: the gazetteer, docs/evaluation.md[.]"):
             await world.evaluate(models=[MODEL], runs=1, for_report=True)
 
     async def test_another_ollama_version_is_named_on_the_screen(self, tmp_path: Path) -> None:

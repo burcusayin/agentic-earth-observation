@@ -249,7 +249,7 @@ class TestWhichRunsCount:
             ("golden", "the golden set"),
             ("evaluation_code", "the evaluation code"),
             ("gazetteer", "the gazetteer"),
-            ("evaluation_rules", "the labelling rules"),
+            ("evaluation_rules", "docs/evaluation.md"),
         ],
     )
     def test_a_run_on_other_frozen_files_is_listed_not_reported(
@@ -1307,7 +1307,14 @@ class TestReviewFindings:
         self, scenario: Report
     ) -> None:
         assert "with 3 tasks the intervals are wide" in render_markdown(scenario)
-        assert "25 to 35 points" not in render_markdown(scenario)
+        assert "can be noise" not in render_markdown(scenario)
+        # The figure is for the 50 tasks of golden-test-v2; the 18 of v1 have another one in the rules.
+        assert report.TEST_SPLIT_TASKS == 50
+        quoted = "less than about 16 to 20 points (8 to 10 tasks) can be noise"
+        assert f"{quoted} (docs/evaluation.md)" in "\n".join(report._comparison_table([], 50))
+        rules = Path(__file__).resolve().parents[1] / "docs" / "evaluation.md"
+        assert quoted in rules.read_text(encoding="utf-8")  # the report quotes the rules, word for word
+        assert "with 18 tasks the intervals are wide" in "\n".join(report._comparison_table([], 18))
 
     def test_a_model_with_other_than_three_runs_says_so(self, tmp_path: Path) -> None:
         write_run(tmp_path, "r1", ALL_PASS)

@@ -1,9 +1,14 @@
 # Evaluation design
 
-How the agents are evaluated: the golden set, the labelling rules, the scoring, and what is frozen. The golden
-test split and this document are frozen (git tag `golden-test-v1`) before any agent prompt is written. The
-MCP tool descriptions already exist; they are checked automatically for test-split content (see
-"No leakage").
+How the agents are evaluated: the golden set, the labelling rules, the scoring, how runs are compared, and what
+is frozen. The golden test split and this document have been frozen twice:
+
+- **`golden-test-v1`** (2026-10-31): 18 test tasks, frozen before any agent prompt was written. The MCP tool
+  descriptions already existed; they are checked automatically for test-split content (see "No leakage"). The
+  results of v1.0 are on these tasks.
+- **`golden-test-v2`**: the same 18 tasks, unchanged, followed by 32 new ones, and the rules for comparing two
+  setups. The new tasks were added on 2026-11-12, after the results of v1.0 had been seen and before any run
+  on them. The labelling rules and the scoring are word for word those of v1.
 
 ## What is measured
 
@@ -12,21 +17,34 @@ it found, decline what it cannot do, ask when a place is unknown, and cite only 
 
 ## Golden set
 
-22 tasks in `data/golden/dev.jsonl` (4) and `data/golden/test.jsonl` (18), one JSON object per line.
+54 tasks in `data/golden/dev.jsonl` (4) and `data/golden/test.jsonl` (50), one JSON object per line.
 
-| Category | Dev | Test | Purpose |
-|---|---|---|---|
-| `single_search` | 1 | 5 | One question, one search: product, place, dates, cloud limit, limit |
-| `follow_up` | 1 | 2 | Two turns; the second changes one thing and keeps the rest |
-| `robustness` | 1 | 3 | Typos in the wording, other languages, relative dates |
-| `out_of_scope` | 1 | 2 | Requests the system must decline without searching, including a prompt injection |
-| `clarify` | 0 | 3 | Places the gazetteer does not know, including a misspelt one: the system must ask |
-| `edge` | 0 | 3 | Radar with a cloud limit, dates before a satellite launched, a search with no results |
+| Category | Dev | Test, v1 | Test, added in v2 | Test | Purpose |
+|---|---|---|---|---|---|
+| `single_search` | 1 | 5 | 4 | 9 | One question, one search: product, place, dates, cloud limit, limit |
+| `follow_up` | 1 | 2 | 5 | 7 | Two turns; the second changes one thing and keeps the rest |
+| `robustness` | 1 | 3 | 13 | 16 | Typos in the wording, other languages, relative dates |
+| `out_of_scope` | 1 | 2 | 3 | 5 | Requests the system must decline without searching, including a prompt injection |
+| `clarify` | 0 | 3 | 4 | 7 | Places the gazetteer does not know, including a misspelt one: the system must ask |
+| `edge` | 0 | 3 | 3 | 6 | Radar with a cloud limit, dates before a satellite launched, a search with no results |
+| Total | 4 | 18 | 32 | 50 | |
 
 - **Split.** Prompts and tool descriptions are tuned on the dev split only. The test split is only measured.
   Dev and test use different places (checked by a test).
-- **Live check.** Every expected search was run against Earth Search on 2026-10-30; each task's notes record how
-  many scenes it returned. Only the "no results" task returns none, by design.
+- **Live check.** Every expected search was run against Earth Search, those of v1 on 2026-10-30 and those added
+  in v2 on 2026-11-12; each task's notes record how many scenes it returned. Only the "no results" task of v1
+  returns none, by design.
+- **The tasks added in v2** (decision of 2026-11-12 in `docs/decisions.md`):
+  - Their ids start with `v2-`. Of the 13 robustness tasks, 8 ask for a relative date, 3 are in other languages
+    and 2 have typos in the wording. A relative-date task's id is `v2-relative-<period>-…`, the period one of
+    `last-month` (2 tasks), `last-spring` (1), `last-summer` (1), `last-autumn` (2) and `last-winter` (2).
+  - They need no labelling rule that v1 did not have, and every expected search is over one of the eight places
+    of the v1 test split.
+  - The mix leans on the kinds of task that v1.0 failed. A pass rate on the 50 tasks is therefore not comparable
+    with v1.0's on 18, and says nothing about typical requests.
+  - They were written, labelled a second time and reviewed by separate sessions of an AI coding assistant, none
+    of which wrote prompts for the system. No person has read them. The checks they went through, and what
+    those found, are in the decision.
 
 ## Labelling rules
 
@@ -162,9 +180,13 @@ Reported alongside:
   three times the evidence.
 - Results are reported as counts (for example 14/18 tasks), with 95% bootstrap confidence intervals that
   resample whole tasks.
-- With 18 test tasks, one task is about 5.6 percentage points, and a single model's interval is roughly ±20
+- With 50 test tasks, one task is 2 percentage points, and a single model's interval is roughly ±11 to ±14
   points.
-  - Differences between two models of less than about 25 to 35 points (5 or 6 tasks) can be noise.
+  - Differences between two models of less than about 16 to 20 points (8 to 10 tasks) can be noise.
+  - With the 18 tasks of v1, one task is about 5.6 points, a single model's interval is roughly ±20 points, and
+    differences between two models of less than about 25 to 35 points (5 or 6 tasks) can be noise.
+  - These figures take the tasks to be independent. The relative-date tasks that share a period are not, so the
+    real intervals are somewhat wider.
   - Pairwise claims use an exact sign test (McNemar) on the tasks where the two models differ, with 6
     comparisons among 4 models.
   - Per-category numbers are descriptive only.
@@ -174,14 +196,45 @@ Reported alongside:
   - the hashes of the prompts, the tool descriptions, the golden set and the evaluation code;
   - the seed.
 
+## Comparing two setups
+
+A setup is a set of runs with the same code, prompts, tool descriptions and model options. When something is
+changed and measured again, the two setups of one model are compared as below. At this tag `eo-agent report`
+makes none of these comparisons yet, and counts only runs on the current golden set: the rules are fixed here
+first, before that code and before any run on the 50 tasks.
+
+- **A task's result** in a setup is the result that most of the model's runs in that setup had (3 runs, or more
+  when an evaluation was started again), among the runs with a result: a run lost to the infrastructure has
+  none, and an errored run counts as failed. A task without a majority is left out, and counted as left out.
+  This is the rule already used between two models.
+- **Before and after:** the tasks passed in both setups, failed in both, gained, lost and left out. Every gained
+  or lost task is listed by id, with an exact two-sided sign test on gained against lost.
+- **Seen and new:** the same on all 50 tasks, on the 18 of v1, whose results had been seen when the change was
+  chosen, and on the 32 added in v2, which had not been run when the first change after this tag was chosen.
+  For a later change all 50 have been seen, and the split into seen and new says nothing.
+- **Relative dates:** for the relative-date tasks added in v2, the tasks passed per period, before and after. A
+  period passes when all its tasks pass; a period with a task left out is left out, and counted. The sign test
+  is over the five periods. It cannot go below p = 0.0625, so nothing is called significant on its strength.
+- **Session noise:** the 18 tasks of v1 in the runs of v1.0 against the baseline runs on the 50 tasks, which use
+  the same prompts, compared as under "Before and after". A difference there is not the effect of a change to
+  the prompts, the tool descriptions or the agents, which are the same on both sides; it shows what the session,
+  the task order among 50 tasks and the live catalogue can move.
+- **Determinism:** over the turns that every run of a model reached, the share where all runs made the same tool
+  calls (names, arguments, order), and the share where they also cited the same scenes. Within a setup, and
+  between the two setups of the session-noise comparison.
+
+The noise figure for two different models (see "Runs and statistics") does not apply to one model before and
+after: those results are paired, task by task, and are judged by the tasks that changed.
+
 ## What is frozen
 
-At the git tag `golden-test-v1`:
-- the test split;
-- this document's labelling rules and scoring;
-- `data/gazetteer.json`;
+At the git tag `golden-test-v2`:
+- the test split: the 18 tasks of `golden-test-v1`, byte for byte, followed by the 32 added;
+- this document's labelling rules and scoring, unchanged since `golden-test-v1`, and its rules for comparing
+  two setups;
+- `data/gazetteer.json`, unchanged since `golden-test-v1`;
 - the evaluation code (`evals/golden.py`, `evals/scoring.py`, including the reference date and the
-  thresholds).
+  thresholds), unchanged since `golden-test-v1`.
 
 A fix after that needs a dated entry in `docs/decisions.md` and a new tag. `evaluation_code_hash()` in
 `evals/golden.py` identifies the evaluation code in every run record.
