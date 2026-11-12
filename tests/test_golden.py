@@ -159,7 +159,7 @@ def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
     # A fix to any of them needs a dated decision and a new tag, and then new values in run_eval.py. The
     # literal digests here are the ones taken at the tag; the constants must stay equal to them. The dev split
     # is not frozen, so the hash over both splits is pinned here only to show when it last changed.
-    assert golden_hash() == "cff3336c3bcf7ec3a513000086b4b27adbff48a3f4b133149283c6820f97ea4e"
+    assert golden_hash() == "fe7aa7979bcdd77ecdfe1ee40dc34ae9304dd949048c26d577df8658baa7907b"
     assert (
         evaluation_code_hash()
         == FROZEN_EVALUATION_CODE
@@ -179,7 +179,7 @@ def test_the_frozen_files_are_as_they_were_at_the_tag() -> None:
         (
             "data/golden/test.jsonl",
             FROZEN_TEST_SPLIT,
-            "e35a79510fe96b705f59df4f495acff22e80c9508bf3c1bba0b1b0dfbf28a30c",
+            "7f4847562d2e6c43f91b74945201d3cc03cb99091fdcb923764060a41582ea6c",
         ),
     ):
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == constant == frozen, path

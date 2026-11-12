@@ -708,6 +708,12 @@ plan, and, in the bullets that say so, what was done since:
     requirements, one weak task, one note. Three were accepted and one was the same as another. Four tasks changed:
     three were reworded, their expected searches with them, and one had its note corrected. The review of those
     four raised no finding.
+  - That last reviewer also left five observations it did not count as findings. Another session weighed each
+    of them against the rules, and kept four as they were. The fifth it judged a weak task: the expected answer
+    is the only one the rules allow and the scoring is right for every behaviour, but the question's wording
+    added a way to fail that has nothing to do with what the task measures. Only that question was reworded,
+    after the tasks had been appended and before the tag; its id, expected answer and notes did not change. It
+    was labelled once more from the rewording alone, and the label agreed.
   - This separation is by procedure. On one machine with one maintainer nothing enforces it; what the record can
     show is the order: the tag, the improvement's commit, the start of the runs. That each session read and ran
     only what its brief allowed was checked afterwards from the record of its tool calls, with scripts that print

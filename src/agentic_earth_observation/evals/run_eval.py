@@ -100,7 +100,7 @@ EMPTY_SEARCH_TASKS = 1
 # v2 begins with that of v1, whose hash stays here to show it (decision of 2026-11-12); the evaluation code
 # and the gazetteer are those of v1.
 FROZEN_TAG = "golden-test-v2"
-FROZEN_TEST_SPLIT = "e35a79510fe96b705f59df4f495acff22e80c9508bf3c1bba0b1b0dfbf28a30c"
+FROZEN_TEST_SPLIT = "7f4847562d2e6c43f91b74945201d3cc03cb99091fdcb923764060a41582ea6c"
 FROZEN_TEST_SPLIT_V1 = "86123f066e640af1464347956058eac5a9c04799f5ce7400549fb9422b16f784"
 TEST_TASKS_V1 = 18  # the first lines of the test split, which FROZEN_TEST_SPLIT_V1 is the hash of
 FROZEN_EVALUATION_CODE = "72d140b004d9a42eaa017ea53db68334407cea46a82b5d4b871ff45d94c3b9cb"
