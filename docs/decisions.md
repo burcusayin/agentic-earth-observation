@@ -655,3 +655,115 @@ findings are folded in below. Where the frozen text leaves a choice open, these 
   development tools) and virtualenv 21.14.6 to 21.15.6 (development tools only). Each is at or above its fixed
   version, and nothing else in the lock moved. The test runs were made with the old versions, which their records
   name; no result depends on these packages, and Earth Search answers over HTTPS with the new certificate bundle.
+
+## 2026-11-12
+The follow-up milestones start with the evaluation: a larger test split first, then one targeted improvement
+measured on it. What was decided before any of it was written, after a separate read-only session had reviewed the
+plan:
+
+- **A second version of the golden set, tag `golden-test-v2`, before the first improvement.** The error analysis of
+  v1.0 points at a fix (`docs/results.md`: a relative date resolved a year early). But a fix chosen from 18 tasks
+  and measured again on the same 18 shows little: the task that suggested it is the task it is scored on, and one
+  task at most can change. So the test split grows first, to the 18 tasks of v1, unchanged, followed by 32 new ones,
+  and is frozen again before the improvement is built.
+- **The mix of the new tasks:**
+
+  | Category | v1 | Added | v2 |
+  |---|---|---|---|
+  | `single_search` | 5 | 4 | 9 |
+  | `follow_up` | 2 | 5 | 7 |
+  | `robustness` | 3 | 13 | 16 |
+  | `out_of_scope` | 2 | 3 | 5 |
+  | `clarify` | 3 | 4 | 7 |
+  | `edge` | 3 | 3 | 6 |
+  | Total | 18 | 32 | 50 |
+
+  - Of the 13 robustness tasks, 8 ask for a relative date, each of the five periods of the labelling rules at
+    least once, 3 are in other languages and 2 have typos in the wording. No second task without results is added.
+  - The mix leans on the kinds of task that v1.0 failed. The pass rate on the 50 tasks is therefore not comparable
+    with v1.0's on 18, and says nothing about typical requests.
+  - The gazetteer does not change, and its ten places are all in use (two in the dev split, eight in the test
+    split), so the new tasks ask about the eight places of the test split again.
+- **No new labelling rule.** A task that would need a rule `docs/evaluation.md` does not state is left out, so that
+  the prompts of v1.0 are measured on rules they were told (2026-11-02).
+- **Who writes the new tasks.** A separate session writes them from the labelling rules and checks every expected
+  search against the catalogue. Another separate session then labels them a second time, from the questions alone,
+  and the maintainer decides every disagreement and reads every task. The session that writes prompts and the
+  improvement reads neither the test split nor the candidates: the commands that check them
+  (`evals/candidates.py`) print totals only, and write what they find to a file.
+  - This separation is by procedure. On one machine with one maintainer nothing enforces it; what the record can
+    show is the order: the tag, the improvement's commit, the start of the runs.
+  - Publishing only a hash of the new tasks until the improvement is finished was considered and not adopted: with
+    the tasks on the same machine either way, it would show no more than that order.
+- **The ids of the new tasks carry their groups** (`evals/groups.py`): they start with `v2-`, and a relative-date
+  task is `v2-relative-<period>-…`, the period one of `last-month`, `last-spring`, `last-summer`, `last-autumn`
+  and `last-winter`. A report can then tell the tasks seen in v1.0 from the new ones, and group the relative-date
+  tasks by period, although a task has no field for either and `golden.py` is frozen.
+- **The dev split does not change.** A run record's golden hash covers both splits, so a change to the dev split
+  between two sets of runs would make the earlier ones another golden set; and the runner's tests are written for
+  its four tasks. New dev material goes into the probe (`scripts/probe_models.py`).
+- **Relative dates are probed under other dates than the reference date.** At the reference date the five periods
+  have five answers, the same for a place of the dev split as for one of the test split. A probe case there would
+  be the test's answer with the place swapped, and its dates would be test-split dates in a script the leakage test
+  scans.
+- **Registered before any run on the v2 test split:**
+  - **Target:** relative dates, if a local model fails a relative-date probe case in at least 3 of its 5 runs;
+    otherwise the next failure of v1.0 that shows on the dev split (ministral-3:8b declining requests in other
+    languages, 2026-11-03).
+  - **Order:** the improvement is finished on its branch before the first run on the v2 test split starts. Its
+    pull request changes nothing under `evals/`, `data/` or `docs/evaluation.md`.
+  - **Primary result:** qwen3.5:9b on the new relative-date tasks, before and after, each task by the majority of
+    its 3 runs, shown per period as counts.
+  - **No significance is claimed for it.** Tasks that ask for the same period are not independent, and with five
+    periods an exact two-sided sign test cannot go below p = 0.0625 (it takes six that all change the same way for
+    0.031). The p-value is printed with that note. Rules for more periods would be a second round, measured again.
+  - **Secondary:** all 50 tasks before and after, with every task that changed listed; the 18 tasks of v1 apart
+    from the new ones, since the fix was chosen from them; ministral-3:8b the same way (it passed the relative-date
+    task of v1, so little change is expected there).
+  - **Session noise:** the 18 tasks of v1 in the runs of v1.0 and in the baseline on the v2 split, which use the
+    same prompts. A difference there is not the improvement's (2026-11-03: a run does not always repeat itself).
+  - **Runs:** the six runs of a phase come from one command at one commit, and a commit of run records touches
+    only `results/`. If an evaluation aborts, it is started again and every run is listed; all complete runs of a
+    setup count, and the report says how many there are.
+  - **One round:** a change to the improvement after its first run on the v2 test split is a second round, and is
+    reported as one.
+- **The oracle's request is a function of its own** (`oracle_request` in `evals/run_eval.py`), so that the check of
+  new tasks against the catalogue asks exactly what a run will ask. The runner's behaviour is unchanged.
+- **How two setups of one model are compared.** A setup is a set of runs with the same code, prompts, tool
+  descriptions and model options. These rules go into `docs/evaluation.md` in the commit that freezes it again, so
+  that the text and its hash change together:
+
+  | | Rule |
+  |---|---|
+  | A task's result | The majority of the model's 3 runs in a setup. A task without a majority is left out, and counted as left out. This is the rule already used between two models. |
+  | Before and after | For one model: the tasks passed in both setups, failed in both, gained, lost and left out. Every gained or lost task is listed by id. An exact two-sided sign test on gained against lost. |
+  | Seen and new | The same three times: on all 50 tasks, on the 18 of v1, and on the 32 added in v2. |
+  | Relative dates | For the new relative-date tasks, the tasks passed per period, before and after. A period passes when all its tasks pass. The sign test is over the five periods and is printed with the note that it cannot go below 0.0625. |
+  | Session noise | The 18 tasks of v1 in the runs of v1.0 against the baseline on the v2 split. |
+  | Determinism | Over the turns that every run of a model reached: the share where all runs made the same tool calls (names, arguments, order), and the share where they also cited the same scenes. Within a setup, and between the two setups of the session-noise comparison. |
+  | Noise with 50 tasks | One task is 2 points. A single model's interval is about ±12 points. A difference between two models of less than about 16 to 20 points (8 to 10 tasks) can be noise. |
+
+  - The noise figures are the normal approximation of a 95% interval, 1.96 · sqrt(p(1 − p)/n), and sqrt(2) times
+    it for the difference between two models, at pass rates p of 0.5, 0.75 and 0.8. For n = 50 that is ±13.9,
+    ±12.0 and ±11.1 points for one model, and 19.6, 17.0 and 15.7 points between two.
+  - `docs/evaluation.md` does not say how its figures for 18 tasks were made (±20 points; 25 to 35 points, 5 or 6
+    tasks). The same calculation gives ±20.0 points at p = 0.75, and 26 to 33 points (4.7 to 5.9 tasks) between
+    two models, so it agrees with them; it is a reconstruction, not the original working.
+- **The checker resolves the five periods itself** (`period_dates` in `evals/candidates.py`). A relative-date task
+  must expect a search over exactly the dates that the period in its id means on the reference date. Two
+  labellings can make the same slip in a date; this check cannot. It is a second reading of two labelling rules, in
+  a file that is not frozen and that no model reads, and the rules stay those of `docs/evaluation.md`. "Complete"
+  is read as: the season's last day is before today.
+- **What the writing session was told beyond the mix:**
+  - Relative-date tasks are in English, have one turn and name the period in the rules' own words, so that a
+    failure is about the date and nothing else.
+  - Every expected search must find scenes. The runner allows one task whose search finds nothing
+    (`EMPTY_SEARCH_TASKS`), and v1 has it.
+  - A place name, as a question writes it, must resolve in the gazetteer where a search is expected, and must not
+    where a clarification is.
+  - It does not read the prompts, the probe script or the results: the tasks come from the rules and from what a
+    user might ask.
+  - The check against the catalogue is made with `candidates live` only, within 60 requests.
+  - Before the tasks join the split, the scan of `tests/test_no_leakage.py` is run on them (a local script calls
+    the test's own functions with the candidates added in memory). A term that system code already contains is
+    then found while the task can still be reworded.

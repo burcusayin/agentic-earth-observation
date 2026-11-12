@@ -6,6 +6,7 @@ and the tool-call log is a real file that the fake orchestrator writes as the MC
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import random
 import time
@@ -559,6 +560,18 @@ class TestTheOracleQuery:
         weather = run.attempts()[3].turns[0]
         assert weather.oracle is None
         assert run.catalog.requests[1].max_cloud_cover is None  # a radar search has no cloud limit
+
+    async def test_an_expected_place_the_gazetteer_lacks_is_a_bug_of_the_runner(self, tmp_path: Path) -> None:
+        # load_golden checks every expected place against the gazetteer, so only a bug gets this far.
+        run = Run(tmp_path)
+        plan = dataclasses.replace(run.plan, gazetteer=Gazetteer({}))
+        search = DEV_TASKS[0].turns[0].expect.search
+        assert search is not None
+        with pytest.raises(
+            run_eval.Aborted, match="a bug in the runner: the expected place 'milan' is not in the gazetteer"
+        ):
+            await run_eval._oracle(search, DECLINED, run.catalog, plan)
+        assert run.catalog.requests == []
 
     async def test_recall_is_measured_when_the_task_asks_for_a_number_of_scenes(self, tmp_path: Path) -> None:
         text = "Two Sentinel-2 scenes of Milan from March 2025"
