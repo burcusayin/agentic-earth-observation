@@ -31,8 +31,9 @@ scene searches over A2A to a retrieval agent, which calls an MCP server wrapping
     writes down: the run record and the attempt records), `outcome.py` (what a turn counts as: scored,
     infrastructure or errored), `servers.py` (the run's MCP server and retrieval agent as child processes),
     `model_server.py` (Ollama: which build runs, and that it alone is loaded), `run_eval.py` (the run loop,
-    `eo-agent eval`), `stats.py` (bootstrap intervals, the exact sign test), `report.py` (which runs count,
-    the numbers and the markdown, `eo-agent report`), `groups.py` (which test tasks were added in v2, and the
+    `eo-agent eval`), `stats.py` (bootstrap intervals, the exact sign test), `setups.py` (how two setups of
+    one model are compared), `report.py` (which runs count, the setups, the numbers and the markdown,
+    `eo-agent report`), `groups.py` (which test tasks were added in v2, and the
     relative period of a task, read from its id) and `candidates.py` (the checks on new test tasks before they
     join the split; it prints totals only).
 - `data/`: `gazetteer.json` (OpenStreetMap, ODbL) and `golden/{dev,test}.jsonl`. `tests/cassettes/`: recorded

@@ -1,27 +1,35 @@
-"""The report on a split's runs (docs/evaluation.md, "Runs and statistics").
+"""The report on a split's runs (docs/evaluation.md, "Runs and statistics" and "Comparing two setups").
 
 This first part reads the run folders: which runs count, and what each task came to in them. Every run is
 listed, and one that does not count says why: reports cover every run, failed ones included (decision of
 2026-11-05). Only a run that ended `complete`, from a clean checkout, on the frozen files and the split's
 tasks, with a record that adds up, in a folder of its own name, and on the same setup as the latest such run,
-is in the numbers.
+is in the headline numbers.
+
+The runs of earlier setups keep their results, for the comparison of two setups (decision of 2026-11-12). So
+do the runs of an earlier frozen golden set that `EARLIER_GOLDEN_SETS` names: they are compared with the first
+setup on this golden set, on the tasks they share, and used for nothing else.
 """
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import json
 import shutil
 import subprocess
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agentic_earth_observation.config import ROOT
 from agentic_earth_observation.evals.golden import SPLITS, Task
+from agentic_earth_observation.evals.groups import added_in_v2
 from agentic_earth_observation.evals.records import (
     ATTEMPTS_FILE,
     MAX_ATTEMPTS,
@@ -42,6 +50,17 @@ from agentic_earth_observation.evals.run_eval import (
     Split,
 )
 from agentic_earth_observation.evals.scoring import ArgumentScore
+from agentic_earth_observation.evals.setups import (
+    Actions,
+    Change,
+    Determinism,
+    PeriodChange,
+    TurnKey,
+    change,
+    determinism,
+    period_change,
+    turn_actions,
+)
 from agentic_earth_observation.evals.stats import (
     Interval,
     Result,
@@ -61,14 +80,60 @@ RunState = Literal[
     "aborted",
     "dirty",
     "other_golden_set",
+    "earlier_golden_set",
     "inconsistent",
     "other_setup",
     "reported",
 ]
 COUNTED: tuple[Result, ...] = ("passed", "failed", "errored", "lost")  # the order counts are written in
 RUNS_PER_MODEL = 3  # docs/evaluation.md: "Every model runs every task 3 times"
+AgentsCode = Literal["same", "differs", "unknown"]
+SYSTEM_CODE = "src/agentic_earth_observation/"  # the code the agents run, but for:
+EVALUATION_CODE = "src/agentic_earth_observation/evals/"
 # The frozen test split (golden-test-v2), which the noise figure quoted from docs/evaluation.md is for.
 TEST_SPLIT_TASKS = 50
+
+
+class EarlierGoldenSet(BaseModel):
+    """A frozen golden set whose runs the report still reads, for the session-noise comparison only.
+
+    `golden` and `evaluation_rules` are the hashes its runs record. `tasks` is, for each split, the digest
+    (`tasks_digest`) of the tasks its runs ran, as those tasks read in the golden set the report is made from:
+    a run on it is used only when its tasks have not changed since.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tag: str
+    golden: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evaluation_rules: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tasks: dict[Split, str]
+
+
+# The golden set of v1.0's runs. Its 18 test tasks are the first 18 of golden-test-v2, byte for byte
+# (tests/test_golden.py); the digests were taken from the tasks at tag golden-test-v1.
+EARLIER_GOLDEN_SETS = (
+    EarlierGoldenSet(
+        tag="golden-test-v1",
+        golden="743d5e2abb5db223099b2b6f37c73fbdc503b80c745d4a456e999003b5ed9bc7",
+        evaluation_rules="9f3ae9ba0643eebc8082a4b6dc549224fc5674a85af3fa8d75f18ca3f10abb5b",
+        tasks={
+            "dev": "87f2ad93d770ff55687fc95284afa07b4929e5a97c6afed2f8b646e9f6fbb7b2",
+            "test": "e5ff07fec44deb3bbc899696fec34495e0c2745d593846314fea5a8b7e16e014",
+        },
+    ),
+)
+
+
+def tasks_digest(tasks: Sequence[Task]) -> str:
+    """SHA-256 over tasks as they read, in the order of their ids: equal digests, equal tasks. Each task is
+    written as JSON with sorted keys by the standard library, so that the order in which pydantic lays out a
+    task's fields does not matter."""
+    digest = hashlib.sha256()
+    for task in sorted(tasks, key=lambda task: task.id):
+        text = json.dumps(task.model_dump(mode="json"), sort_keys=True, ensure_ascii=False)
+        digest.update(text.encode("utf-8") + b"\n")
+    return digest.hexdigest()
 
 
 class ReportError(Exception):
@@ -84,8 +149,10 @@ class ListedRun(BaseModel):
     state: RunState
     reason: str | None = None
     record: RunRecord | None = None
-    results: dict[str, Result] = {}  # task id -> what it came to; only for a reported run
-    attempts: list[AttemptRecord] = []  # only for a reported run
+    # task id -> what it came to, and the attempts: for a run that counts, a run of an earlier setup and a run
+    # of an earlier golden set the report still reads (the comparison of setups uses them); otherwise empty
+    results: dict[str, Result] = {}
+    attempts: list[AttemptRecord] = []
 
     @model_validator(mode="after")
     def _counted_runs_carry_their_record(self) -> Self:
@@ -101,13 +168,16 @@ def collect_runs(
     *,
     golden: str,
     allow_dirty: bool = False,
+    tasks: Sequence[Task] = (),
 ) -> list[ListedRun]:
     """Every run of `split` under `runs_dir`, in the order they started (their folder names sort so).
 
     `task_turns` names the split's tasks and how many turns each has, and `golden` is the hash of the golden
-    set the report reads: a run on another golden set is listed, not counted. `allow_dirty` counts runs from a
-    checkout with changes, for scratch use. A folder without a readable record cannot always say its split, so
-    it is listed unless it names the other split. Hidden folders (`.git`, ...) are not runs.
+    set the report reads: a run on another golden set is listed, not counted. A run on one of
+    `EARLIER_GOLDEN_SETS` keeps its results when `tasks`, the split's tasks, show that the tasks it ran are
+    unchanged. `allow_dirty` counts runs from a checkout with changes, for scratch use. A folder without a
+    readable record cannot always say its split, so it is listed unless it names the other split. Hidden
+    folders (`.git`, ...) are not runs.
     """
     if not runs_dir.exists():
         return []
@@ -117,14 +187,19 @@ def collect_runs(
     for folder in sorted(
         path for path in runs_dir.iterdir() if path.is_dir() and not path.name.startswith(".")
     ):
-        run = _listed(folder, split, task_turns, golden, allow_dirty)
+        run = _listed(folder, split, task_turns, golden, allow_dirty, tasks)
         if run is not None:
             listed.append(run)
     return listed
 
 
 def _listed(
-    folder: Path, split: Split, task_turns: Mapping[str, int], golden: str, allow_dirty: bool
+    folder: Path,
+    split: Split,
+    task_turns: Mapping[str, int],
+    golden: str,
+    allow_dirty: bool,
+    tasks: Sequence[Task],
 ) -> ListedRun | None:
     """How the report lists one folder, or None for a run of the other split."""
     if folder.is_symlink():
@@ -154,10 +229,20 @@ def _listed(
         return listed("aborted", record.aborted_reason)
     if record.code.dirty and not allow_dirty:
         return listed("dirty", "the checkout had changes that were not committed")
+    state: RunState = "reported"
+    reason = None
     if changed := _other_frozen_files(record, golden):
-        verb = "differs" if len(changed) == 1 else "differ"
-        return listed("other_golden_set", f"{' and '.join(changed)} {verb} from what this report reads")
-    if set(record.task_order) != set(task_turns):  # a record that names a task twice does not read at all
+        earlier, why_not = _earlier_golden_set(record, split, tasks)
+        if earlier is None:
+            verb = "differs" if len(changed) == 1 else "differ"
+            said = f"{' and '.join(changed)} {verb} from what this report reads"
+            return listed("other_golden_set", f"{said}: {why_not}" if why_not else said)
+        state = "earlier_golden_set"
+        reason = (
+            f"it ran on {earlier.tag}, on {len(record.task_order)} of these tasks: it is read only for the "
+            "comparison of setups"
+        )
+    elif set(record.task_order) != set(task_turns):  # a record that names a task twice does not read at all
         return listed("other_golden_set", "its tasks are not the tasks of the split")
     try:
         attempts = read_attempts(folder)
@@ -173,7 +258,35 @@ def _listed(
             "inconsistent",
             f"{RUN_FILE} counts {_counts(record.tasks)}; {ATTEMPTS_FILE} gives {_counts(found)}",
         )
-    return ListedRun(folder=folder.name, state="reported", record=record, results=results, attempts=attempts)
+    return ListedRun(
+        folder=folder.name, state=state, reason=reason, record=record, results=results, attempts=attempts
+    )
+
+
+def _earlier_golden_set(
+    record: RunRecord, split: Split, tasks: Sequence[Task]
+) -> tuple[EarlierGoldenSet | None, str | None]:
+    """The earlier golden set the run ran on, if the report still reads it: one of `EARLIER_GOLDEN_SETS`, on
+    today's evaluation code and gazetteer, whose tasks in this split read as they did. Else None, and, for a
+    run on one of them, why it is not read."""
+    hashes = (record.hashes.golden, record.hashes.evaluation_rules)
+    earlier = next((one for one in EARLIER_GOLDEN_SETS if (one.golden, one.evaluation_rules) == hashes), None)
+    if earlier is None:
+        return None, None
+    by_id = {task.id: task for task in tasks}
+    if (record.hashes.evaluation_code, record.hashes.gazetteer) != (FROZEN_EVALUATION_CODE, FROZEN_GAZETTEER):
+        why = "on other evaluation code or another gazetteer than this report reads"
+    elif not tasks:
+        why = "and the report was not given the split's tasks to check them against"
+    elif not set(record.task_order) <= set(by_id):
+        why = "and some of its tasks are not tasks of this split"
+    elif split not in earlier.tasks:
+        why = f"which names no tasks of the {split} split"
+    elif tasks_digest([by_id[task_id] for task_id in record.task_order]) != earlier.tasks[split]:
+        why = "and its tasks have changed since"
+    else:
+        return earlier, None
+    return None, f"it ran on {earlier.tag}, {why}"
 
 
 def _other_frozen_files(record: RunRecord, golden: str) -> list[str]:
@@ -251,7 +364,8 @@ def _check_verdict(attempt: AttemptRecord, turns: int) -> None:
 def mark_comparable(listed: Sequence[ListedRun], root: Path = ROOT) -> list[ListedRun]:
     """`listed`, with every counted run that is not on the latest counted run's setup marked `other_setup`,
     and what differs. After a fix the runs are repeated and both are listed (decision of 2026-11-05): the
-    latest, which count, and the earlier ones, which do not.
+    latest, which count, and the earlier ones, which do not. Those keep their results, for the comparison of
+    setups (decision of 2026-11-12).
 
     The setup: the code (commits may differ only in `results/`, where run records are committed between runs),
     the prompts and tool descriptions, the settings, the model options, the task order's seed, the reference
@@ -270,18 +384,51 @@ def mark_comparable(listed: Sequence[ListedRun], root: Path = ROOT) -> list[List
             continue
         same_model = latest_of_model[run.record.model.model]
         why = _setup_differs(run.record, latest.folder, latest_record, same_model, root)
-        marked.append(
-            run.model_copy(update={"state": "other_setup", "reason": why, "results": {}, "attempts": []})
-            if why
-            else run
-        )
+        marked.append(run.model_copy(update={"state": "other_setup", "reason": why}) if why else run)
     return marked
+
+
+def group_setups(runs: Sequence[ListedRun], root: Path = ROOT) -> list[list[ListedRun]]:
+    """The runs of one model, in the order they ran, cut into its setups (decision of 2026-11-12): a run that
+    differs from the first run of the setup before it starts a new one. A setup is what `mark_comparable`
+    says, the model's build included, on one golden set.
+
+    Setups are cut where they change, so a setup that comes back after another is a new one: the runs of a
+    phase come from one command at one commit, and a commit between them, even outside the code, cuts them.
+    A run on a commit this repository does not have, or after one, starts a setup of its own, since what
+    differs cannot be known. ValueError for runs of several models, or a run without its record."""
+    groups: list[list[ListedRun]] = []
+    for run in runs:
+        if run.record is None:
+            raise ValueError(f"{run.folder} has no record to compare")
+        if groups and _same_setup(run.record, groups[-1][0], root):
+            groups[-1].append(run)
+        else:
+            groups.append([run])
+    if len(_models(runs)) > 1:
+        raise ValueError(f"setups are cut for one model at a time, not for {', '.join(_models(runs))}")
+    return groups
+
+
+def _same_setup(record: RunRecord, first: ListedRun, root: Path) -> bool:
+    """Whether a run is on the setup whose first run is `first`, of the same model: compared as the later of
+    the two, so that git's messages name the commits in the order they ran."""
+    earlier = first.record
+    assert earlier is not None  # noqa: S101 - group_setups checked it
+    if record.hashes.golden != earlier.hashes.golden:
+        return False
+    commits = {earlier.code.commit, record.code.commit}
+    if len(commits) > 1 and not all(_has_commit(root, commit) for commit in commits):
+        return False
+    later = ListedRun(folder="", state="reported", record=record)
+    return _setup_differs(earlier, "", record, later, root) is None
 
 
 def _setup_differs(
     record: RunRecord, latest_folder: str, latest: RunRecord, same_model: ListedRun, root: Path
 ) -> str | None:
-    """How a run's setup differs from the latest counted run's, or None."""
+    """How a run's setup differs from that of `latest`, or None. ReportError when the two commits differ and
+    this repository does not have that of `latest`; the comparison of setups checks both commits first."""
     for field, words in (
         ("retrieval_prompt", "retrieval prompt differs from that"),
         ("decide_prompt", "decision prompt differs from that"),
@@ -512,8 +659,60 @@ class Comparison(BaseModel):
     p_value: float
 
 
+class SetupSummary(BaseModel):
+    """One setup of a model: its runs, in the order they ran, numbered from the model's first setup."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str
+    number: int = Field(ge=1)
+    golden: str | None  # the tag of an earlier golden set; None for the one the report reads
+    runs: list[str]
+    differs: str | None  # how it differs from the model's setup before it
+
+
+class SetupChange(BaseModel):
+    """One model's tasks in two consecutive setups on the golden set the report reads."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str
+    before: int  # setup numbers
+    after: int
+    change: bool  # what the agents are given or run differs; otherwise only their environment does
+    first: bool  # the model's first change on this golden set: the only one whose new tasks had not been run
+    rows: list[Change]  # all tasks, then, for the first change, the tasks of v1 and those added in v2
+    periods: PeriodChange | None
+
+
+class SessionNoise(BaseModel):
+    """One model's runs on an earlier golden set against its first setup on this one, on shared tasks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str
+    tag: str
+    earlier: int  # setup numbers
+    baseline: int | None
+    refused: str | None = None  # why the two are not compared
+    differences: list[str] = []  # what differs besides the golden set and the task order
+    agents: AgentsCode = "same"  # whether the code the agents run is the same on both sides
+    change: Change | None = None
+
+
+class DeterminismRow(BaseModel):
+    """The determinism of one model's runs in one setup, or across the two sides of a session-noise pair."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str
+    label: str
+    measure: Determinism
+
+
 class Report(BaseModel):
-    """The report on one split: every run listed, and the numbers of the runs that count."""
+    """The report on one split: every run listed, the numbers of the runs that count, and the comparison of
+    setups."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -522,6 +721,10 @@ class Report(BaseModel):
     models: list[ModelSummary]
     comparisons: list[Comparison]
     scratch: bool  # runs from a checkout with changes are in the numbers
+    setups: list[SetupSummary] = []
+    changes: list[SetupChange] = []
+    session_noise: list[SessionNoise] = []
+    determinism: list[DeterminismRow] = []
 
 
 def build_report(
@@ -541,8 +744,291 @@ def build_report(
         for index, first in enumerate(models)
         for second in models[index + 1 :]
     ]
-    scratch = any(record.code.dirty for _, record in counted)
-    return Report(split=split, listed=list(listed), models=models, comparisons=comparisons, scratch=scratch)
+    compared = _compare_setups(listed, tasks, root)
+    used = {folder for setup in compared["setups"] for folder in setup.runs}
+    scratch = any(
+        run.record is not None and run.record.code.dirty and (run.state == "reported" or run.folder in used)
+        for run in listed
+    )
+    return Report(
+        split=split, listed=list(listed), models=models, comparisons=comparisons, scratch=scratch, **compared
+    )
+
+
+def _compare_setups(listed: Sequence[ListedRun], tasks: Sequence[Task], root: Path) -> dict[str, Any]:
+    """For each model: its setups, numbered in the order they ran; the comparison of its consecutive setups on
+    this golden set; the session noise of its last setup on an earlier golden set against its first on this
+    one; and the determinism of each (docs/evaluation.md, "Comparing two setups"). The fields of `Report`
+    they fill."""
+    current = [run for run in listed if run.state in ("reported", "other_setup") and run.record is not None]
+    earlier = [run for run in listed if run.state == "earlier_golden_set" and run.record is not None]
+    order = [task.id for task in tasks]
+    found: dict[str, list[Any]] = {"setups": [], "changes": [], "session_noise": [], "determinism": []}
+    for model in _models([*earlier, *current]):
+        before, now = group_setups(_of(earlier, model), root), group_setups(_of(current, model), root)
+        ordered = sorted([*before, *now], key=_started)
+        number = {id(group): index for index, group in enumerate(ordered, start=1)}
+        for index, group in enumerate(ordered):
+            found["setups"].append(
+                SetupSummary(
+                    model=model,
+                    number=number[id(group)],
+                    golden=_tag_of(group) if group in before else None,
+                    runs=[run.folder for run in group],
+                    differs=_differs_from(ordered[index - 1], group, root) if index else None,
+                )
+            )
+            if (measure := _determinism(group, order)) is not None:
+                found["determinism"].append(
+                    DeterminismRow(model=model, label=f"setup {number[id(group)]}", measure=measure)
+                )
+        changed_before = False
+        for first, second in itertools.pairwise(now):
+            pair = _setup_change(
+                model,
+                (number[id(first)], first),
+                (number[id(second)], second),
+                not changed_before,
+                order,
+                root,
+            )
+            changed_before = changed_before or pair.change
+            found["changes"].append(pair)
+        if before:
+            baseline = (number[id(now[0])], now[0]) if now else None
+            noise = _session_noise(model, (number[id(before[-1])], before[-1]), baseline, order, root)
+            found["session_noise"].append(noise)
+            if noise.change is not None and now:
+                both = [*before[-1], *now[0]]
+                shared = [task_id for task_id in order if all(task_id in run.results for run in both)]
+                found["determinism"].append(
+                    DeterminismRow(
+                        model=model,
+                        label=(
+                            f"setups {noise.earlier} and {noise.baseline}, "
+                            f"on the {len(shared)} tasks of {noise.tag}"
+                        ),
+                        measure=determinism([turn_actions(run.attempts) for run in both], shared),
+                    )
+                )
+    return found
+
+
+def _started(group: Sequence[ListedRun]) -> tuple[datetime, str]:
+    """When a setup's first run started; its folder's name, which starts with that time, breaks a tie."""
+    record = group[0].record
+    assert record is not None  # noqa: S101 - see _tag_of
+    return record.started_at, group[0].folder
+
+
+def _models(runs: Sequence[ListedRun]) -> list[str]:
+    """The models of the runs, in the order they first ran."""
+    return list(dict.fromkeys(run.record.model.model for run in runs if run.record is not None))
+
+
+def _of(group: Sequence[ListedRun], model: str) -> list[ListedRun]:
+    return [run for run in group if run.record is not None and run.record.model.model == model]
+
+
+def _tag_of(group: Sequence[ListedRun]) -> str:
+    record = group[0].record
+    assert record is not None  # noqa: S101 - group_setups takes only runs with a record
+    hashes = (record.hashes.golden, record.hashes.evaluation_rules)
+    return next(
+        earlier.tag for earlier in EARLIER_GOLDEN_SETS if (earlier.golden, earlier.evaluation_rules) == hashes
+    )
+
+
+def _differs_from(before: Sequence[ListedRun], after: Sequence[ListedRun], root: Path) -> str:
+    """How the first run of a model's setup differs from the first run of its setup before, said of the
+    setup. Something does: `group_setups` cut there."""
+    first, then = before[0], after[0]
+    assert first.record is not None  # noqa: S101 - see _tag_of
+    assert then.record is not None  # noqa: S101 - see _tag_of
+    if then.record.hashes.golden != first.record.hashes.golden:
+        return "another golden set"
+    commits = {first.record.code.commit, then.record.code.commit}
+    if len(commits) > 1 and not _has_commit(root, first.record.code.commit):
+        return f"the commit of {first.folder} is not in this repository, so the two cannot be compared"
+    why = _setup_differs(then.record, first.folder, first.record, first, root)
+    if why is None:  # pragma: no cover - group_setups cut here, so something differs
+        raise ValueError(f"{then.folder} starts a setup, though nothing differs from {first.folder}")
+    return why
+
+
+def _per_task(runs: Sequence[ListedRun]) -> dict[str, list[Result]]:
+    """Each task's results over the runs that ran it."""
+    per_task: dict[str, list[Result]] = {}
+    for run in runs:
+        for task_id, result in run.results.items():
+            per_task.setdefault(task_id, []).append(result)
+    return per_task
+
+
+def _shared(order: Sequence[str], *sides: Mapping[str, Sequence[Result]]) -> list[str]:
+    """The tasks every side ran, in the order of the split."""
+    return [task_id for task_id in order if all(task_id in side for side in sides)]
+
+
+def _setup_change(
+    model: str,
+    before: tuple[int, Sequence[ListedRun]],
+    after: tuple[int, Sequence[ListedRun]],
+    may_be_first: bool,
+    order: Sequence[str],
+    root: Path,
+) -> SetupChange:
+    """One model's two consecutive setups on this golden set: every run in them is the model's. A pair is a
+    change when what the agents are given or run differs; otherwise only their environment does, and the
+    pair shows noise. The model's first change is the one whose new tasks had not been run."""
+    (number_before, runs_before), (number_after, runs_after) = before, after
+    mine, theirs = runs_before[0].record, runs_after[0].record
+    assert mine is not None  # noqa: S101 - see _tag_of
+    assert theirs is not None  # noqa: S101 - see _tag_of
+    is_change = _chosen_change(mine, theirs, root)
+    first = may_be_first and is_change
+    results_before, results_after = _per_task(runs_before), _per_task(runs_after)
+    shared = _shared(order, results_before, results_after)
+    rows = [change(f"All {len(shared)} tasks", shared, results_before, results_after)]
+    new = [task_id for task_id in shared if added_in_v2(task_id)]
+    seen = [task_id for task_id in shared if not added_in_v2(task_id)]
+    if first and new and seen:
+        rows += [
+            change(
+                f"The {len(seen)} of v1, seen when the change was chosen", seen, results_before, results_after
+            ),
+            change(f"The {len(new)} added in v2", new, results_before, results_after),
+        ]
+    return SetupChange(
+        model=model,
+        before=number_before,
+        after=number_after,
+        change=is_change,
+        first=first,
+        rows=rows,
+        periods=period_change(shared, results_before, results_after),
+    )
+
+
+def _chosen_change(mine: RunRecord, theirs: RunRecord, root: Path) -> bool:
+    """Whether what the agents are given or run differs between two runs: the prompts, the tool descriptions,
+    the settings, the model options, or the code the agents run. When that code cannot be known (a checkout
+    with changes, a commit this repository does not have), it may have: a change, to be safe. The Ollama
+    version, the model's build, the libraries, the task order's seed, the reference date and the code outside
+    the agents are their environment."""
+    if (
+        (mine.hashes.retrieval_prompt, mine.hashes.decide_prompt, mine.hashes.tool_descriptions)
+        != (theirs.hashes.retrieval_prompt, theirs.hashes.decide_prompt, theirs.hashes.tool_descriptions)
+        or mine.settings != theirs.settings
+        or mine.model.options != theirs.model.options
+        or mine.code.dirty
+        or theirs.code.dirty
+    ):
+        return True
+    if mine.code.commit == theirs.code.commit:
+        return False
+    return _code_difference(mine.code.commit, theirs.code.commit, root)[1] != "same"
+
+
+def _session_noise(
+    model: str,
+    earlier: tuple[int, Sequence[ListedRun]],
+    baseline: tuple[int, Sequence[ListedRun]] | None,
+    order: Sequence[str],
+    root: Path,
+) -> SessionNoise:
+    """A model's last setup on an earlier golden set against its first on this one. Refused when what the
+    model was asked, or the model itself, differs: the prompts, the tool descriptions, the model options or
+    its build. Everything else that differs is listed."""
+    number, runs_before = earlier
+    pair = SessionNoise(model=model, tag=_tag_of(runs_before), earlier=number, baseline=None)
+    if baseline is None:
+        return pair.model_copy(update={"refused": f"{model} has no setup on this golden set yet"})
+    baseline_number, runs_after = baseline
+    pair = pair.model_copy(update={"baseline": baseline_number})
+    mine, theirs = runs_before[0].record, runs_after[0].record
+    assert mine is not None  # noqa: S101 - see _tag_of
+    assert theirs is not None  # noqa: S101 - see _tag_of
+    for differs, words in (
+        (mine.hashes.retrieval_prompt != theirs.hashes.retrieval_prompt, "the retrieval prompt differs"),
+        (mine.hashes.decide_prompt != theirs.hashes.decide_prompt, "the decision prompt differs"),
+        (mine.hashes.tool_descriptions != theirs.hashes.tool_descriptions, "the tool descriptions differ"),
+        (mine.model.options != theirs.model.options, "the model options differ"),
+        (mine.model.digest != theirs.model.digest, "the model's build differs"),
+    ):
+        if differs:
+            return pair.model_copy(
+                update={"refused": f"{words}, and the comparison is for the same model, asked the same way"}
+            )
+    results_before, results_after = _per_task(runs_before), _per_task(runs_after)
+    shared = _shared(order, results_before, results_after)
+    differences, agents = _what_else_differs(mine, theirs, root)
+    return pair.model_copy(
+        update={
+            "differences": differences,
+            "agents": agents,
+            "change": change(f"The {len(shared)} tasks of {pair.tag}", shared, results_before, results_after),
+        }
+    )
+
+
+def _what_else_differs(mine: RunRecord, theirs: RunRecord, root: Path) -> tuple[list[str], AgentsCode]:
+    """What the run records say differs between the runs of a session-noise pair, besides the golden set and
+    what refuses the comparison; and whether the code the agents run is the same, differs, or cannot be
+    known."""
+    found = []
+    for what, first, second in (
+        ("settings", mine.settings, theirs.settings),
+        ("libraries", mine.libraries, theirs.libraries),
+    ):
+        if keys := sorted(key for key in first.keys() | second.keys() if first.get(key) != second.get(key)):
+            found.append(f"{what}: {', '.join(keys)}")
+    for differs, said in (
+        (mine.shuffle_seed != theirs.shuffle_seed, "the task order's seed"),
+        (mine.reference_date != theirs.reference_date, "the reference date"),
+        (
+            mine.model.server_version != theirs.model.server_version,
+            f"Ollama {mine.model.server_version} and {theirs.model.server_version}",
+        ),
+        (mine.model.provider != theirs.model.provider, "the model's provider"),
+        (mine.platform != theirs.platform, "the platform"),
+        (mine.code.dirty or theirs.code.dirty, "a checkout with uncommitted changes"),
+    ):
+        if differs:
+            found.append(said)
+    agents: AgentsCode = "unknown" if mine.code.dirty or theirs.code.dirty else "same"
+    if mine.code.commit != theirs.code.commit:
+        said, code = _code_difference(mine.code.commit, theirs.code.commit, root)
+        found.append(said)
+        agents = "unknown" if "unknown" in (agents, code) else code
+    return found, agents
+
+
+def _code_difference(first: str, second: str, root: Path) -> tuple[str, AgentsCode]:
+    """The files that differ between two commits outside `results/`, those of the code the agents run (under
+    `src/`, outside `evals/`) named; and whether that code is the same, differs, or cannot be known."""
+    if not (_has_commit(root, first) and _has_commit(root, second)):
+        return f"the code: commit {first[:12]} or {second[:12]} is not in this repository", "unknown"
+    done = _git(root, "diff", "--name-only", first, second, "--", ".", f":(exclude){OUTPUT_FOLDER}")
+    if done.returncode != 0:
+        said = " ".join(done.stderr.split())[:200]
+        raise ReportError(f"git cannot compare {first[:12]} and {second[:12]} in {root.name}: {said}")
+    files = done.stdout.split()
+    system = [name for name in files if name.startswith(SYSTEM_CODE) and not name.startswith(EVALUATION_CODE)]
+    named = f": {', '.join(system)}" if system else ""
+    said = (
+        f"the code: {_count(len(files), 'file')} outside {OUTPUT_FOLDER}/, "
+        f"{len(system)} of them in the code the agents run{named}"
+    )
+    return said, "differs" if system else "same"
+
+
+def _determinism(runs: Sequence[ListedRun], order: Sequence[str]) -> Determinism | None:
+    """The determinism of a setup's runs over the tasks in `order`; None for a single run."""
+    if len(runs) < 2:
+        return None
+    actions: list[dict[TurnKey, Actions]] = [turn_actions(run.attempts) for run in runs]
+    return determinism(actions, order)
 
 
 def _model_summary(
@@ -733,6 +1219,7 @@ STATE_WORDS: dict[RunState, str] = {
     "aborted": "aborted",
     "dirty": "dirty checkout",
     "other_golden_set": "other golden set",
+    "earlier_golden_set": "earlier golden set",
     "inconsistent": "inconsistent",
     "other_setup": "other setup",
     "reported": "counted",
@@ -774,10 +1261,158 @@ def render_markdown(report: Report) -> str:
         lines += _headline_table(report.models)
         if report.comparisons:
             lines += _comparison_table(report.comparisons, report.models[0].tasks)
+    if report.changes or report.session_noise:
+        lines += _setups_section(report)
+    if report.determinism:
+        lines += _determinism_table(report.determinism)
+    if report.models:
         for summary in report.models:
             lines += _model_section(summary)
         lines += _notes(report)
     return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _setups_section(report: Report) -> list[str]:
+    counted = (
+        " The numbers above count the runs marked counted in the table of every run: those on the setup of "
+        "the latest run, also when a run on another setup came between them."
+        if report.models
+        else ""
+    )
+    lines = [
+        "## Between setups",
+        "",
+        "A setup is a set of a model's runs, one after another, with the same code, prompts, tool "
+        f"descriptions and model options.{counted} A task's result in a setup is the "
+        "majority of the model's runs there, among the runs with a result; a task without one is left out, "
+        "and counted. The exact sign test is on the tasks gained against those lost (docs/evaluation.md, "
+        '"Comparing two setups").',
+        "",
+        "| Model | Setup | Golden set | Runs | What differs from the model's setup before |",
+        "|---|---|---|---|---|",
+    ]
+    for setup in report.setups:
+        lines.append(
+            f"| {_cell(setup.model)} | {setup.number} | {_cell(setup.golden or 'this one')} | "
+            f"{_cell(', '.join(setup.runs))} | {_cell(setup.differs or '')} |"
+        )
+    lines.append("")
+    for pair in report.changes:
+        lines += _change_section(pair)
+    for noise in report.session_noise:
+        lines += _noise_section(noise)
+    return lines
+
+
+CHANGE_HEADER = [
+    "| Tasks | Passed in both | Failed in both | Gained | Lost | Left out (no majority) | p |",
+    "|---|---|---|---|---|---|---|",
+]
+
+
+def _change_rows(rows: Sequence[Change]) -> list[str]:
+    lines = [*CHANGE_HEADER]
+    for row in rows:
+        lines.append(
+            f"| {_cell(row.scope)} | {row.both_passed} | {row.both_failed} | {len(row.gained)} | "
+            f"{len(row.lost)} | {row.left_out} | {_p(row.p_value)} |"
+        )
+    lines.append("")
+    whole = rows[0]
+    lines += [
+        f"- Gained: {_cell(', '.join(whole.gained)) or 'none'}.",
+        f"- Lost: {_cell(', '.join(whole.lost)) or 'none'}.",
+        "",
+    ]
+    return lines
+
+
+def _change_section(pair: SetupChange) -> list[str]:
+    lines = [f"### {_cell(pair.model)}: setup {pair.before}, then setup {pair.after}", ""]
+    if not pair.change:
+        lines += [
+            "Nothing the agents are given or run differs between these two setups, only their environment "
+            "(see the table of setups), so this shows noise, not the effect of a change.",
+            "",
+        ]
+    lines += _change_rows(pair.rows)
+    if pair.change and not pair.first:
+        lines += [
+            "For a change after the model's first on this golden set, every task had been run when it was "
+            "chosen, so the split into seen and new tasks says nothing and is not shown.",
+            "",
+        ]
+    if pair.periods is not None:
+        lines += _periods_table(pair.periods)
+    return lines
+
+
+def _periods_table(periods: PeriodChange) -> list[str]:
+    lines = [
+        "| Relative period | Tasks | Passed before | Passed after | Period before | Period after |",
+        "|---|---|---|---|---|---|",
+    ]
+    for result in periods.periods:
+        lines.append(
+            f"| {result.period} | {result.tasks} | {result.passed_before} | {result.passed_after} | "
+            f"{result.before} | {result.after} |"
+        )
+    left_out = len(periods.periods) - periods.compared
+    lines += [
+        "",
+        f"A period passes when all its tasks pass; one with a task left out is left out "
+        f"({_count(left_out, 'period')} here). Sign test over the {_count(periods.compared, 'period')} "
+        f"with a result on both sides: {periods.gained} gained, {periods.lost} lost, "
+        f"p = {_p(periods.p_value)}. With {_count(periods.compared, 'period')} it cannot go below "
+        f"{periods.floor:g}, so nothing is called significant on its strength.",
+        "",
+    ]
+    return lines
+
+
+def _noise_section(noise: SessionNoise) -> list[str]:
+    against = f"setup {noise.baseline}" if noise.baseline is not None else "a setup on this golden set"
+    lines = [
+        f"### Session noise, {_cell(noise.model)}: setup {noise.earlier} ({noise.tag}) against {against}",
+        "",
+    ]
+    if noise.refused is not None or noise.change is None:
+        return [*lines, f"Not compared: {_cell(noise.refused or 'nothing to compare')}.", ""]
+    differences = "; ".join(noise.differences) or "nothing else that the run records name"
+    same = {
+        "same": "A difference here is not the effect of a change to them, to the model or to the code the "
+        "agents run, which are the same on both sides.",
+        "differs": "The code the agents run differs too, so a difference here may also come from it.",
+        "unknown": "Whether the code the agents run is the same cannot be told, so a difference here may "
+        "also come from it.",
+    }[noise.agents]
+    lines += [
+        f"The tasks of {noise.tag} in both setups, with the same prompts, tool descriptions, model options "
+        f"and build. {same} It shows what the session, the task order among more tasks and the live "
+        f"catalogue can move. What else differs: {_cell(differences)}.",
+        "",
+    ]
+    return [*lines, *_change_rows([noise.change])]
+
+
+def _determinism_table(rows: Sequence[DeterminismRow]) -> list[str]:
+    lines = [
+        "## Determinism",
+        "",
+        "Over the turns that every run reached in a scored attempt: the share where every run made the same "
+        "tool calls (tools, arguments, order), and the share where every run also cited the same scenes.",
+        "",
+        "| Model | Runs of | Runs | Turns every run reached | Same tool calls | Also the same scenes |",
+        "|---|---|---|---|---|---|",
+    ]
+    for row in rows:
+        measure = row.measure
+        lines.append(
+            f"| {_cell(row.model)} | {_cell(row.label)} | {measure.runs} | {measure.turns} | "
+            f"{Rate(part=measure.same_calls, whole=measure.turns)} | "
+            f"{Rate(part=measure.same_scenes, whole=measure.turns)} |"
+        )
+    return [*lines, ""]
 
 
 def _runs_table(listed: Sequence[ListedRun]) -> list[str]:

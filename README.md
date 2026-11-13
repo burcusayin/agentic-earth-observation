@@ -123,7 +123,9 @@ test split runs only with `--for-report`, from a clean checkout, because every r
 
 `uv run eo-agent report --split dev --runs-dir results/raw --allow-dirty` turns those folders into a report in
 markdown: every run with why it counts or not, then for each model the passed tasks with 95% intervals (lost
-tasks left out, and counted as failed), the comparison of the models, and the secondary measures. It prints task
+tasks left out, and counted as failed), the comparison of the models, and the secondary measures. When the
+runs span more than one setup, it also compares them: each model before and after a change, task by task, with the
+session noise against the runs of v1.0 and how often the runs of a setup did the same. It prints task
 ids, never a task's text. `make report` writes the report on the test split's runs to `results/summary.md`.
 It counts the runs on the current test split only. The runs of v1.0 are on the 18 tasks of `golden-test-v1`, so
 their report is kept as `results/summary-v1.0.md`; `make report` at tag `v1.0.1` makes it again.

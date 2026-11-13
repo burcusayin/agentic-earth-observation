@@ -416,7 +416,9 @@ class TestComparableSetup:
             ("other_setup", "its code differs from that of r2 outside results/"),
             ("reported", None),
         ]
-        assert (found[0].results, found[0].attempts) == ({}, [])  # nothing of it reaches the numbers
+        # Its results stay, for the comparison of the two setups (decision of 2026-11-12); the headline
+        # numbers take only runs that count (TestSetups checks both).
+        assert found[0].results == dict.fromkeys(TASKS, "passed")
 
     @pytest.mark.parametrize(
         ("changes", "said"),
