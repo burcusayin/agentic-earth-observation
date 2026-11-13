@@ -132,6 +132,7 @@ def _report(args: argparse.Namespace) -> int:
             {task.id: len(task.turns) for task in tasks},
             golden=golden_hash(),
             allow_dirty=args.allow_dirty,
+            tasks=tasks,
         )
         text = render_markdown(build_report(args.split, listed, tasks))
     except (ReportError, GoldenError, GazetteerError) as err:

@@ -831,6 +831,80 @@ plan, and, in the bullets that say so, what was done since:
   - A run record's `evaluation_rules` hash is of the whole of `docs/evaluation.md`. It therefore differs between
     the runs of v1.0 and runs at this tag, although the labelling rules and the scoring do not. The runner and the
     report now name that hash `docs/evaluation.md`, where they said "the labelling rules".
-- **Not yet in the code.** The report compares nothing between setups yet, uses none of the id groups, and counts
-  only runs of the current golden set, so the session-noise comparison with the runs of v1.0 needs it changed. That
-  is the next part of the work.
+- **Not yet in the code** at tag `golden-test-v2`: the report compared nothing between setups, used none of the id
+  groups, and counted only runs of the current golden set. The next paragraphs say how that changed.
+
+The report compares setups, as `docs/evaluation.md` says, before any run on the 50 tasks: so the only code that
+differs between the baseline runs and the runs after the improvement is the improvement. Decided with the
+maintainer from a design table, then changed where two independent reviews, one after the other, found it wrong:
+
+- **Each model has its own setups,** cut where they change. A model's runs are taken in the order they started; a
+  run that differs from the first run of the model's setup before it starts a new one. The checks are those the
+  report already made (code outside `results/`, prompts, tool descriptions, settings, model options, the task
+  order's seed, the reference date, the Ollama version, the model's build), and another golden set.
+  - The first version cut setups across all models. A rebuild of one model, or an Ollama upgrade between two
+    models' runs, then cut the other model's setups too, and pairs and the "first change" landed on the wrong
+    setups. The review showed it with made-up runs.
+  - A setup that comes back after another is a new one, since the runs of a phase come from one command.
+  - Setups are numbered in the order their first runs started, those on an earlier golden set included.
+- **A cut is not always a change.** Two consecutive setups of a model are a *change* when what the agents are given
+  or run differs: a prompt, the tool descriptions, the settings, the model options, or the code the agents run
+  (under `src/`, outside `evals/`). When that code cannot be known (a checkout with changes, a commit this
+  repository does not have), the pair counts as a change, to be safe. Otherwise only the agents' environment
+  differs (the Ollama version, the model's build, the task order's seed, the reference date, other files), and the
+  report says the pair shows noise, not the effect of a change.
+  - The second review found why this matters: a baseline restarted after an Ollama upgrade became "the first
+    change", so the real change after it lost its split into seen and new tasks.
+  - Only a change can be the model's first, the one shown on the tasks of v1 and those added in v2.
+  - **A limit the report relies on:** a commit between the runs of one phase cuts them, and if it touches the code
+    the agents run, the report takes it for a change. The runs of a phase therefore come from one command at one
+    commit, and nothing but run records is committed between them (registered above).
+- **The headline numbers are as before.** They count the runs on the setup of the latest run, as decided on
+  2026-11-05. The only difference: the runs of earlier setups keep their results and attempts for the comparison,
+  where the report used to empty them. The first version also changed which runs the headline counted; that was
+  undone.
+- **The runs of v1.0 are read again, for the session noise only.** The report keeps a pinned table of earlier golden
+  sets (`EARLIER_GOLDEN_SETS`): for `golden-test-v1`, the hashes its runs record for the golden set and for
+  `docs/evaluation.md`, and a digest of the tasks they ran, in each split, as those tasks read today.
+  - The digest is of each task as JSON with sorted keys, written by the standard library, so that the order in
+    which pydantic lays out a task's fields does not matter. Both digests were checked against the tasks at the
+    tag. A change in how pydantic writes a value would make the runs of v1.0 unreadable, and the report would say
+    their tasks have changed; it would not read a wrong run.
+  - A run on it is used only on today's evaluation code and gazetteer, and only when the digest still matches.
+    Otherwise it is listed as before, as another golden set, with why it is not read.
+  - It is listed as "earlier golden set", read only for the comparison of setups: the session noise, and the
+    determinism of its setups.
+- **What the report compares.** For each model and each two of its consecutive setups on the current golden set:
+  - the tasks passed in both, failed in both, gained, lost and left out, with the gained and lost tasks by id and
+    the sign test on gained against lost;
+  - for the model's first change only, the same on the 18 tasks of v1 and on the 32 added in v2;
+  - the relative periods, before and after, with the smallest p-value the test can give printed exactly
+    (0.0625 for five periods).
+- **The session noise** compares each model's last setup on `golden-test-v1` with its own first setup on the
+  current golden set, on the tasks both ran.
+  - It is refused when the model was asked otherwise or is another model: another prompt, other tool descriptions,
+    other model options or another build. The rule speaks of the same prompts; the model options and the build were
+    added because a difference in them would not be the session's either.
+  - Everything else that differs is listed from the run records: settings, libraries, the task order's seed, the
+    reference date, the Ollama version, the model's provider, the platform, a checkout with changes, and the files
+    that differ between the two commits, with those of the code the agents run named.
+  - The text says whether the code the agents run is the same on both sides, differs, or cannot be told (a
+    checkout with changes, a commit this repository does not have). Between the runs of v1.0 and `main` today it
+    differs in one file, `catalog/stac.py`, by one line: the version in the User-Agent the catalogue client sends.
+    So the report will say that a difference may also come from it.
+- **Determinism** is measured over the turns that every run reached in a scored attempt: in how many every run made
+  the same tool calls (tool, arguments as JSON with sorted keys, order), and in how many it also cited the same set
+  of scenes. It is given for each setup of each model, and across the two sides of the session-noise pair.
+  - On the runs of v1.0, every run of each model did the same in every turn it reached: 20 of 20 turns for
+    qwen3.5:9b and 19 of 19 for ministral-3:8b. A separate script, which reads the raw run files without the
+    project's code, gives the same counts.
+- **A report that used runs from a checkout with changes** says so at the top, also when only an earlier setup had
+  them, since the comparison uses its runs.
+- **The tests on the real runs of v1.0 print nothing of them when they fail.** They pick those runs by their golden
+  set's hash, so that runs on the 50 tasks can sit beside them, and they assert only numbers and names: a failed
+  assert on a run object would print its attempts, which hold the test split.
+- **The two latent defects in the frozen files** (2026-11-07) were checked again on the 32 new tasks, by counts
+  only. No turn of either split reaches them, so no score changes.
+- **The comparison code is in `evals/setups.py`**, with the report choosing the runs and writing the markdown.
+  `docs/evaluation.md` does not change: its sentence that the report makes none of these comparisons is said of the
+  tag `golden-test-v2`, where it holds.
